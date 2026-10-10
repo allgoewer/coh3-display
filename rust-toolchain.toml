@@ -1,0 +1,3 @@
+# The app builds with stable; the firmware has its own file in firmware/.
+[toolchain]
+channel = "stable"

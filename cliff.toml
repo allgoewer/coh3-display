@@ -1,0 +1,48 @@
+# git-cliff: release notes from conventional commits (https://www.conventionalcommits.org).
+# CI runs it for the commits of one release (see .github/workflows/build.yml); `git-cliff`
+# alone prints the whole history.
+
+[changelog]
+header = "# Changelog\n"
+body = """
+{% if version %}\
+## {{ version }} ({{ timestamp | date(format="%Y-%m-%d") }})
+{% else %}\
+## Unreleased
+{% endif %}\
+{% set breaking = commits | filter(attribute="breaking", value=true) %}\
+{% if breaking | length > 0 %}
+### Breaking changes
+{% for commit in breaking %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+{{ commit.breaking_description | default(value=commit.message) | upper_first }} ({{ commit.id | truncate(length=7, end="") }})\
+{% endfor %}
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+{{ commit.message | split(pat="\n") | first | upper_first }} ({{ commit.id | truncate(length=7, end="") }})\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+# Commits that do not follow the convention are listed under "Other", not dropped.
+filter_unconventional = false
+protect_breaking_commits = true
+# Only version tags separate releases; build-only tags (test-1, nightly) do not.
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
+# The comments in the group names only fix their order; the template strips them.
+commit_parsers = [
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^feat", group = "<!-- 1 -->Features" },
+    { message = "^fix", group = "<!-- 2 -->Fixes" },
+    { message = "^perf", group = "<!-- 3 -->Performance" },
+    { message = "^docs?", group = "<!-- 4 -->Documentation" },
+    { message = "^(refactor|test|build|ci|chore|style|revert)", group = "<!-- 5 -->Internal" },
+    { message = ".*", group = "<!-- 6 -->Other" },
+]

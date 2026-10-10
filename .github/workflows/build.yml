@@ -1,0 +1,102 @@
+name: Build
+
+# Every tag is built. A tag "v" + semantic version (v1.2.3) also becomes a GitHub release.
+on:
+  push:
+    tags: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write # to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog needs the history and the tags
+
+      - name: Tag info
+        id: info
+        shell: pwsh
+        env:
+          REF: ${{ github.ref }}
+        run: ./ci/release-info.ps1 -Ref $env:REF
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            firmware -> target
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $installed = (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -or
+            (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")
+          if (-not $installed) { choco install innosetup -y --no-progress }
+
+      - name: Test
+        run: cargo test --locked
+
+      # Firmware, then the app that embeds it, then the installer.
+      - name: Build
+        shell: pwsh
+        run: ./installer/build.ps1
+
+      - name: Collect files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/installer/*-setup.exe dist/
+          Copy-Item target/release/coh3-display.exe dist/
+          Push-Location dist
+          Get-FileHash * -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content SHA256SUMS.txt -Encoding ascii
+          Pop-Location
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.info.outputs.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Install git-cliff
+        if: steps.info.outputs.is_release == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      # Notes for this version only: the conventional commits since the previous v* tag,
+      # or the whole history for the first release.
+      - name: Release notes
+        if: steps.info.outputs.is_release == 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $previous = git describe --tags --abbrev=0 --match 'v[0-9]*' "$env:TAG^" 2>$null
+          if ($LASTEXITCODE -eq 0 -and $previous) {
+            git-cliff --strip header --output notes.md "$previous..$env:TAG"
+          } else {
+            git-cliff --strip header --output notes.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'git-cliff failed' }
+          Get-Content notes.md
+
+      - name: Release
+        if: steps.info.outputs.is_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.info.outputs.prerelease }}
+        run: |
+          $files = Get-ChildItem dist | ForEach-Object FullName
+          $options = @('--title', $env:TAG, '--notes-file', 'notes.md', '--verify-tag')
+          if ($env:PRERELEASE -eq 'true') { $options += '--prerelease' }
+          gh release create $env:TAG @files @options
+          if ($LASTEXITCODE -ne 0) { throw 'creating the release failed' }

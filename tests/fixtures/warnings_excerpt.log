@@ -1,0 +1,32 @@
+(I) [21:10:38.033] [000015420]: [SP_BG] login event. LocalProfileID: 63411
+(I) [21:10:40.850] [000015420]: GAME -- Scenario: data:scenarios\frontend\showcase\italy\showcase_italy
+(I) [21:10:40.850] [000015420]: GAME -- Win Condition Qualified Name: 00000000000000000000000000000000:385555344
+(I) [21:10:40.850] [000015420]: GAME -- Win Condition Name: no_win_condition
+(I) [21:10:40.850] [000015420]: GAME -- Human Player: 0  -2 0 frontend
+(I) [21:10:40.850] [000015420]: GAME -- Human Player: 0  -2 1 americans
+(I) [21:10:40.850] [000015420]: GAME -- Human Player: 0  -2 0 americans
+(I) [21:10:43.820] [000015420]: GAME -- Starting mission: data:scenarios\frontend\showcase\italy\showcase_italy
+(I) [21:21:13.236] [000015420]: GameApp::SetTargetState : new (Game) old (Uninitialized)
+(I) [21:21:13.250] [000015420]: REC -- Validating replay [playback:temp_download.rec]...
+(I) [21:21:13.273] [000015420]: GAME -- Scenario: data:scenarios\multiplayer\elst_outskirts_4p\elst_outskirts_4p
+(I) [21:21:13.273] [000015420]: GAME -- Win Condition Qualified Name: 00000000000000000000000000000000:3318379781
+(I) [21:21:13.273] [000015420]: GAME -- Win Condition Name: VictoryPoint
+(I) [21:21:13.273] [000015420]: GAME -- Human Player: 0 Heartless Jäger 317504 0 germans
+(I) [21:21:13.273] [000015420]: GAME -- Human Player: 1 Havoc 131474 1 americans
+(I) [21:21:13.273] [000015420]: GAME -- Human Player: 2 VonManteuffel 5871 0 afrika_korps
+(I) [21:21:13.273] [000015420]: GAME -- Human Player: 3 Tonimontana 72654 1 americans
+(I) [21:21:13.273] [000015420]: GameApp::SetState : new (LoadingGame) old (UnloadedGame)
+(I) [22:11:24.548] [000015420]: Party::OnAdvertisementEvent(AET_Join)(match) -- by anvil/1677280 for party-session 87867200 match-session: 87869429 with matchTypeID: 21/2v2_unranked (m_titlePurchaseRequired: anvil/1677280 [PURCHASE NOT REQUIRED], m_titleRestartRequired: anvil/1677280 [RESTART NOT REQUIRED])
+(I) [22:11:45.021] [000015420]: ProfileID: 63411, slot: 0, ProfileName: /steam/76561198046759481
+(I) [22:11:45.021] [000015420]: MatchSetup::SetMatchStatus: From[2] To[3]
+(I) [22:11:45.046] [000015420]: MOD - Setting player [0] race to: [137123]
+(I) [22:11:45.050] [000015420]: ModDllSetup: SetStatsGameUID=351477717
+(I) [22:11:45.050] [000015420]: GAME -- Scenario: data:scenarios\multiplayer\alamein_4p\alamein_4p
+(I) [22:11:45.050] [000015420]: GAME -- Win Condition Qualified Name: 00000000000000000000000000000000:3318379781
+(I) [22:11:45.050] [000015420]: GAME -- Win Condition Name: VictoryPoint
+(I) [22:11:45.050] [000015420]: GAME -- Human Player: 0 Nullgerät 63411 0 germans
+(I) [22:11:45.050] [000015420]: GAME -- Human Player: 1 Von_Dolofon 15127 1 americans
+(I) [22:11:45.050] [000015420]: GAME -- Human Player: 2 ZOCKER748 873412 0 germans
+(I) [22:11:45.050] [000015420]: GAME -- Human Player: 3 Saulek 3034 1 americans
+(I) [22:11:45.050] [000015420]: GameApp::SetState : new (LoadingGame) old (UnloadedGame)
+(I) [22:11:45.063] [000015420]: [BG] ItemInterfaceModel::commit_FilterArmyUpgradesByActiveRace() (lobby pane Load/Unload)

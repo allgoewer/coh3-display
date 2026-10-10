@@ -1,0 +1,27 @@
+{
+  "result": { "code": 0, "message": "SUCCESS" },
+  "statGroups": [
+    {
+      "id": 630740,
+      "name": "",
+      "type": 1,
+      "members": [
+        {
+          "profile_id": 63411,
+          "name": "/steam/76561198046759481",
+          "alias": "Nullgerät",
+          "personal_statgroup_id": 630740,
+          "xp": 19601,
+          "level": 19601,
+          "leaderboardregion_id": 2074389,
+          "country": "de"
+        }
+      ]
+    }
+  ],
+  "leaderboardStats": [
+    { "statgroup_id": 630740, "leaderboard_id": 2130255, "wins": 35, "losses": 27, "streak": 8, "disputes": 0, "drops": 0, "rank": -1, "ranktotal": 1755, "ranklevel": 0, "rating": 1207, "regionrank": -1, "regionranktotal": 704, "lastmatchdate": 1781862088, "highestrank": 513, "highestranklevel": 9, "highestrating": 1207 },
+    { "statgroup_id": 630740, "leaderboard_id": 2130306, "wins": 44, "losses": 28, "streak": -1, "disputes": 0, "drops": 0, "rank": 372, "ranktotal": 3896, "ranklevel": 12, "rating": 1369, "regionrank": 157, "regionranktotal": 1840, "lastmatchdate": 1791499231, "highestrank": 354, "highestranklevel": 12, "highestrating": 1384 },
+    { "statgroup_id": 630740, "leaderboard_id": 2130300, "wins": 127, "losses": 98, "streak": 2, "disputes": 0, "drops": 0, "rank": -1, "ranktotal": 3555, "ranklevel": 0, "rating": 1408, "regionrank": -1, "regionranktotal": 1546, "lastmatchdate": 1778880125, "highestrank": 281, "highestranklevel": 13, "highestrating": 1408 }
+  ]
+}
