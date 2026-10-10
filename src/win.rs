@@ -16,9 +16,9 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, DLGTEMPLATE, DS_CENTER, DS_MODALFRAME, DS_SETFONT, DialogBoxIndirectParamW, ES_AUTOHSCROLL,
-    ES_PASSWORD, EndDialog, GWLP_USERDATA, GetDlgItemTextW, GetWindowLongPtrW, IDCANCEL, IDOK, IDYES, MB_DEFBUTTON2,
+    ES_PASSWORD, EndDialog, GWLP_USERDATA, GetDlgItemTextW, GetSystemMetrics, GetWindowLongPtrW, IDCANCEL, IDOK, IDYES, MB_DEFBUTTON2,
     MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MessageBoxW,
-    SetDlgItemTextW, SetForegroundWindow, SetWindowLongPtrW, WM_COMMAND, WM_INITDIALOG, WS_BORDER, WS_CAPTION, WS_CHILD,
+    SM_CXSMICON, SetDlgItemTextW, SetForegroundWindow, SetWindowLongPtrW, WM_COMMAND, WM_INITDIALOG, WS_BORDER, WS_CAPTION, WS_CHILD,
     WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
@@ -65,6 +65,15 @@ pub fn claim_single_instance() -> bool {
 pub fn ui_language() -> Lang {
     // SAFETY: takes no arguments and cannot fail.
     Lang::from_langid(unsafe { GetUserDefaultUILanguage() })
+}
+
+/// The side of a notification-area icon in pixels: 16 at 100 % scaling, 24 at 150 %.
+pub fn small_icon_size() -> u32 {
+    // SAFETY: takes a constant and returns a number; 0 means it failed.
+    match unsafe { GetSystemMetrics(SM_CXSMICON) } {
+        size if size > 0 => size as u32,
+        _ => 32,
+    }
 }
 
 fn wide(text: &str) -> Vec<u16> {

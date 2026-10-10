@@ -19,6 +19,7 @@ use coh3_display::autostart;
 use coh3_display::display_link::{LinkCommand, LinkStatus};
 use coh3_display::firmware::{self, BoardWifi, FirmwareState};
 use coh3_display::i18n::Lang;
+use coh3_display::icon;
 use coh3_display::model::MatchInfo;
 use coh3_display::settings::Settings;
 use coh3_display::tray_model::{self, Command as BoardCommand, Entry, MenuModel, Toggle};
@@ -55,23 +56,11 @@ enum Action {
     Quit,
 }
 
-const ICON_SIZE: u32 = 32;
-
-/// A filled circle: green when a display is showing the match, amber otherwise.
+/// The app's icon, lit when a display is showing the match and grey otherwise. Drawn at the
+/// size the notification area uses, so Windows does not have to shrink it.
 fn icon(connected: bool) -> Option<Icon> {
-    let (r, g, b) = if connected { (0x3f, 0xb9, 0x50) } else { (0xd2, 0x99, 0x22) };
-    let centre = (ICON_SIZE as f32 - 1.0) / 2.0;
-    let radius = ICON_SIZE as f32 / 2.0 - 2.0;
-    let mut rgba = Vec::with_capacity((ICON_SIZE * ICON_SIZE * 4) as usize);
-    for y in 0..ICON_SIZE {
-        for x in 0..ICON_SIZE {
-            let distance = ((x as f32 - centre).powi(2) + (y as f32 - centre).powi(2)).sqrt();
-            // One soft pixel at the rim.
-            let alpha = (radius + 0.5 - distance).clamp(0.0, 1.0);
-            rgba.extend_from_slice(&[r, g, b, (alpha * 255.0) as u8]);
-        }
-    }
-    Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).ok()
+    let size = win::small_icon_size();
+    Icon::from_rgba(icon::render(size, connected), size, size).ok()
 }
 
 /// Opens a file or URL with its default program, without flashing a console window.

@@ -4,6 +4,7 @@ pub mod autostart;
 pub mod display_link;
 pub mod firmware;
 pub mod i18n;
+pub mod icon;
 pub mod log_parser;
 pub mod maps;
 pub mod model;

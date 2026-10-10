@@ -1,11 +1,14 @@
 //! Writes `installer/coh3-display.ico`, the icon of the exe, its shortcuts and the installer.
-//! Run with `cargo run --example make_icon` after changing the drawing; the result is checked in.
+//! Run with `cargo run --example make_icon` after changing the drawing in `src/icon.rs`; the
+//! result is checked in.
 
 use std::fs;
 use std::path::Path;
 
-const SIZES: [u32; 4] = [16, 32, 48, 256];
-const GREEN: [u8; 3] = [0x3f, 0xb9, 0x50];
+use coh3_display::icon;
+
+/// One image per size Windows asks for at the usual scalings, so none has to be resampled.
+const SIZES: [u32; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
 
 /// One icon image as a 32-bit BMP without file header, which is how ICO stores bitmaps:
 /// the height counts the colour rows plus an (empty) 1-bit mask, and rows run bottom-up.
@@ -19,14 +22,10 @@ fn image(size: u32) -> Vec<u8> {
     data.extend_from_slice(&32u16.to_le_bytes());
     data.extend_from_slice(&[0; 24]);
 
-    let centre = (size as f32 - 1.0) / 2.0;
-    let radius = size as f32 / 2.0 - size as f32 / 16.0;
-    for y in (0..size).rev() {
-        for x in 0..size {
-            let distance = ((x as f32 - centre).powi(2) + (y as f32 - centre).powi(2)).sqrt();
-            // One soft pixel at the rim.
-            let alpha = (radius + 0.5 - distance).clamp(0.0, 1.0);
-            data.extend_from_slice(&[GREEN[2], GREEN[1], GREEN[0], (alpha * 255.0) as u8]);
+    let rgba = icon::render(size, true);
+    for row in rgba.chunks_exact(size as usize * 4).rev() {
+        for pixel in row.as_chunks::<4>().0 {
+            data.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
     data.resize(data.len() + (mask_row * size) as usize, 0);
