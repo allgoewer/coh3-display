@@ -36,10 +36,52 @@ const MIN_PAGE_TICKS: u32 = 125;
 const STATUS_TICKS: u32 = 750;
 /// The host repeats its frame every 5 s. After this long without one (30 s) it is gone.
 const HOST_TIMEOUT_TICKS: u32 = 750;
-/// The idle label glides one pixel every this many ticks, about 8 pixels a second.
+/// The idle tank drives one pixel every this many ticks, about 8 pixels a second.
 const IDLE_STEP_TICKS: u32 = 3;
-const IDLE_LABEL: &str = "CoH 3";
-const IDLE_FONT: &MonoFont<'static> = &FONT_7X13_BOLD;
+
+/// The idle tank, facing right; it is mirrored to drive left. [`draw_idle`] cuts gaps into
+/// the row of [`TANK_TREAD`], so the tread appears to roll.
+const TANK: [&str; 10] = [
+    ".........#########..........",
+    "........###########.........",
+    "........####################",
+    "........###########.........",
+    "...######################...",
+    ".##########################.",
+    "############################",
+    "#..##..##..##..##..##..##..#",
+    "#..##..##..##..##..##..##..#",
+    ".##########################.",
+];
+const TANK_WIDTH: i32 = 28;
+const TANK_HEIGHT: i32 = TANK.len() as i32;
+const TANK_TREAD: usize = 9;
+
+/// Where the idle tank is: its top-left corner, and +1 when it drives right, -1 for left.
+struct Tank {
+    at: Point,
+    heading: i32,
+}
+
+impl Tank {
+    /// A tank just outside the screen, about to drive across it on a random row of the
+    /// blue area, from a random side.
+    fn entering() -> Self {
+        let random = Rng::new().random();
+        let rows = (64 - HEADER_HEIGHT - TANK_HEIGHT + 1) as u32;
+        let heading = if random & (1 << 16) == 0 { 1 } else { -1 };
+        let x = if heading > 0 { -TANK_WIDTH } else { WIDTH };
+        Tank { at: Point::new(x, HEADER_HEIGHT + (random % rows) as i32), heading }
+    }
+
+    /// Drives one pixel on. A tank that has left the screen comes back on another row.
+    fn advance(&mut self) {
+        self.at.x += self.heading;
+        if self.at.x < -TANK_WIDTH || self.at.x > WIDTH {
+            *self = Tank::entering();
+        }
+    }
+}
 
 /// What the screen is doing. An OLED wears where it is lit, so everything but a running
 /// match ends in `Idle`.
@@ -48,40 +90,12 @@ enum Mode {
     Status { ticks_left: u32 },
     /// The match the host sent; `silent_ticks` counts the time since its last frame.
     Match { silent_ticks: u32 },
-    /// A dimmed label drifting slowly around the blue area, so no pixel is lit for long.
-    Idle { ticks: u32, at: Point, step: Point },
+    /// A dimmed tank patrolling the blue area on changing rows, so no pixel is lit for long.
+    Idle { ticks: u32, tank: Tank },
 }
 
-/// Where the idle label's top-left corner may be: anywhere it fits below the yellow rows.
-fn idle_bounds() -> Rectangle {
-    let label = Size::new(text_width(IDLE_LABEL, IDLE_FONT) as u32, IDLE_FONT.character_size.height);
-    Rectangle::new(
-        Point::new(0, HEADER_HEIGHT),
-        Size::new(WIDTH as u32 - label.width + 1, (64 - HEADER_HEIGHT) as u32 - label.height + 1),
-    )
-}
-
-/// Starts idling at a random spot, heading in a random diagonal direction.
 fn idle() -> Mode {
-    let random = Rng::new().random();
-    let bounds = idle_bounds();
-    let at = bounds.top_left
-        + Point::new((random % bounds.size.width) as i32, ((random >> 8) % bounds.size.height) as i32);
-    let step = Point::new(if random & (1 << 16) == 0 { 1 } else { -1 }, if random & (1 << 17) == 0 { 1 } else { -1 });
-    Mode::Idle { ticks: 0, at, step }
-}
-
-/// Moves the idle label one pixel on, turning round at the edges of its area.
-fn drift(at: &mut Point, step: &mut Point) {
-    let bounds = idle_bounds();
-    let last = bounds.top_left + Point::new(bounds.size.width as i32 - 1, bounds.size.height as i32 - 1);
-    if at.x + step.x < bounds.top_left.x || at.x + step.x > last.x {
-        step.x = -step.x;
-    }
-    if at.y + step.y < bounds.top_left.y || at.y + step.y > last.y {
-        step.y = -step.y;
-    }
-    *at += *step;
+    Mode::Idle { ticks: 0, tank: Tank::entering() }
 }
 
 fn text<D: DrawTarget<Color = BinaryColor>>(target: &mut D, content: &str, at: Point, font: &MonoFont<'_>) {
@@ -256,9 +270,20 @@ fn draw_status<D: DrawTarget<Color = BinaryColor>>(target: &mut D) {
     text(target, &wifi, Point::new(0, HEADER_HEIGHT + 28), &FONT_7X13_BOLD);
 }
 
-fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, at: Point) {
+fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, tank: &Tank) {
     let _ = target.clear(BinaryColor::Off);
-    text(target, IDLE_LABEL, at, IDLE_FONT);
+    let pixels = TANK.iter().enumerate().flat_map(|(row, line)| {
+        line.bytes().enumerate().filter_map(move |(column, cell)| {
+            let column = if tank.heading > 0 { column as i32 } else { TANK_WIDTH - 1 - column as i32 };
+            let at = tank.at + Point::new(column, row as i32);
+            // The tread's gaps stay where they are on the ground while the tank moves over them.
+            let lit = cell == b'#' && (row != TANK_TREAD || at.x.rem_euclid(3) != 0);
+            lit.then_some(Pixel(at, BinaryColor::On))
+        })
+    });
+    // The tank drives in and out of view; what is off the screen is not drawn.
+    let blue = Rectangle::new(Point::new(0, HEADER_HEIGHT), Size::new(WIDTH as u32, (64 - HEADER_HEIGHT) as u32));
+    let _ = target.clipped(&blue).draw_iter(pixels);
 }
 
 /// Draws one page of a match: the header and one player.
@@ -284,7 +309,7 @@ fn draw_match<D: DrawTarget<Color = BinaryColor>>(
 }
 
 /// Owns the OLED: shows the match the host sends, flips between the players, scrolls long
-/// text, and falls back to the dimmed idle label when there is nothing current to show.
+/// text, and falls back to the dimmed idle tank when there is nothing current to show.
 #[embassy_executor::task]
 pub async fn screen_task(i2c: I2c<'static, Async>) {
     let interface = I2CDisplayInterface::new(i2c);
@@ -318,7 +343,7 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
                 (Mode::Match { .. }, Some(current)) => {
                     drawn = draw_match(&mut display, current, page, header_tick, page_tick);
                 }
-                (Mode::Idle { at, .. }, _) => draw_idle(&mut display, *at),
+                (Mode::Idle { tank, .. }, _) => draw_idle(&mut display, tank),
                 _ => draw_status(&mut display),
             }
             let _ = display.flush().await;
@@ -382,12 +407,12 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
                             mode = idle();
                         }
                     }
-                    Mode::Idle { ticks, at, step } => {
+                    Mode::Idle { ticks, tank } => {
                         *ticks += 1;
                         dirty = *ticks >= IDLE_STEP_TICKS;
                         if dirty {
                             *ticks = 0;
-                            drift(at, step);
+                            tank.advance();
                         }
                     }
                 }

@@ -22,8 +22,8 @@ current:
 - The host sends the match while it is being played and for 5 minutes after the player left
   it; before and after that it sends `I`.
 - A display that has heard nothing for 30 seconds goes idle on its own (the host is gone).
-- Idle is the label "CoH 3" at the lowest brightness, drifting slowly below the top 16 rows
-  (the yellow part of the panel stays dark). After power-on and after a change of
+- Idle is a small tank at the lowest brightness, driving across the screen below the top 16
+  rows on a different row each time (the yellow part of the panel stays dark). After power-on and after a change of
   its WiFi state the display shows a status screen for 30 seconds first.
 
 The host only sends the opposing team. When the local player is not in the match (a replay),
