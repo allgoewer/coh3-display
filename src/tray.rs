@@ -18,6 +18,7 @@ use coh3_display::applog::{self, log};
 use coh3_display::autostart;
 use coh3_display::display_link::{LinkCommand, LinkStatus};
 use coh3_display::firmware::{self, BoardWifi, FirmwareState};
+use coh3_display::i18n::Lang;
 use coh3_display::model::MatchInfo;
 use coh3_display::settings::Settings;
 use coh3_display::tray_model::{self, Command as BoardCommand, Entry, MenuModel, Toggle};
@@ -36,6 +37,8 @@ pub struct TrayContext {
     pub settings_path: Option<PathBuf>,
     /// Requests to the thread that owns the display's USB port.
     pub commands: mpsc::Sender<LinkCommand>,
+    /// The language of the menu and its dialogs.
+    pub lang: Lang,
 }
 
 enum UserEvent {
@@ -116,11 +119,11 @@ impl App {
                 }
                 Entry::OpenLog => {
                     self.actions.insert(id.clone(), Action::OpenLog);
-                    menu.append(&MenuItem::with_id(id, "Open log file", true, None))
+                    menu.append(&MenuItem::with_id(id, self.ctx.lang.open_log(), true, None))
                 }
                 Entry::Quit => {
                     self.actions.insert(id.clone(), Action::Quit);
-                    menu.append(&MenuItem::with_id(id, "Quit", true, None))
+                    menu.append(&MenuItem::with_id(id, self.ctx.lang.quit(), true, None))
                 }
             };
         }
@@ -135,6 +138,7 @@ impl App {
             &self.ctx.settings.borrow(),
             autostart::is_enabled(),
             firmware::embedded().map(|firmware| firmware.version),
+            self.ctx.lang,
         );
         if self.shown.as_ref() == Some(&model) {
             return;
@@ -172,8 +176,9 @@ impl App {
         };
         if let Some(outcome) = outcome.filter(|outcome| outcome.id != self.last_outcome) {
             self.last_outcome = outcome.id;
-            win::message(TITLE, &outcome.message, !outcome.ok);
-            if !outcome.ok {
+            let ok = outcome.kind.ok();
+            win::message(TITLE, &self.ctx.lang.outcome(&outcome.kind), !ok);
+            if !ok {
                 self.offer_wifi = false;
             }
         }
@@ -195,11 +200,7 @@ impl App {
         let Some(port) = self.ctx.links.borrow().usb.as_ref().map(|usb| usb.port.clone()) else {
             return;
         };
-        let question = format!(
-            "Install display firmware {} on the ESP32 board at {port}?\n\n\
-             Whatever is on that board now will be replaced. Only continue if this is your CoH3 display.",
-            firmware.version
-        );
+        let question = self.ctx.lang.confirm_install(firmware.version, &port);
         if win::confirm(TITLE, &question) && self.ctx.commands.send(LinkCommand::InstallFirmware).is_ok() {
             self.offer_wifi = true;
         }
@@ -208,7 +209,7 @@ impl App {
     fn setup_wifi(&mut self) {
         let mut ssid = String::new();
         loop {
-            let Some((entered_ssid, password)) = win::ask_wifi(&ssid) else {
+            let Some((entered_ssid, password)) = win::ask_wifi(&ssid, self.ctx.lang) else {
                 return;
             };
             ssid = entered_ssid.trim().to_string();
@@ -217,7 +218,7 @@ impl App {
                     let _ = self.ctx.commands.send(LinkCommand::SetWifi { ssid, password });
                     return;
                 }
-                Err(err) => win::message(TITLE, &format!("{err:#}"), true),
+                Err(err) => win::message(TITLE, self.ctx.lang.credential_error(err), true),
             }
         }
     }

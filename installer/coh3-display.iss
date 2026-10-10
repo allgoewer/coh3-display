@@ -1,4 +1,4 @@
-; Inno Setup script for the CoH3 Display tray app. Build with installer\build.ps1, which
+﻿; Inno Setup script for the CoH3 Display tray app. Build with installer\build.ps1, which
 ; passes the version from Cargo.toml as /DAppVersion=x.y.z.
 
 #ifndef AppVersion
@@ -35,11 +35,21 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
+; Setup follows the Windows display language without asking, like the app does.
+ShowLanguageDialog=no
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+
+[CustomMessages]
+english.AutostartTask=Start %1 when I sign in to Windows
+german.AutostartTask=%1 starten, wenn ich mich bei Windows anmelde
+english.DeleteSettings=Also delete your CoH3 Display settings and log file?
+german.DeleteSettings=Auch deine Einstellungen und die Logdatei von CoH3 Display löschen?
 
 [Tasks]
-Name: "autostart"; Description: "Start {#AppName} when I sign in to Windows"
+Name: "autostart"; Description: "{cm:AutostartTask,{#AppName}}"
 
 [Files]
 Source: "..\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -54,7 +64,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "coh3-display"; Flags: uninsdeletevalue dontcreatekey
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // Settings and the log are kept by default, so a reinstall picks up where it left off.
@@ -62,7 +72,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
   begin
-    if MsgBox('Also delete your CoH3 Display settings and log file?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    if MsgBox(CustomMessage('DeleteSettings'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
     begin
       DelTree(ExpandConstant('{userappdata}\coh3-display'), True, True, True);
       DelTree(ExpandConstant('{localappdata}\coh3-display'), True, True, True);

@@ -15,6 +15,7 @@ use tokio::sync::watch;
 
 use crate::applog::log;
 use crate::firmware::{self, BoardWifi, FirmwareState};
+use crate::i18n::Lang;
 use crate::model::{Faction, MatchInfo, Phase, PlayerInfo};
 use crate::settings::Settings;
 
@@ -54,8 +55,22 @@ pub enum LinkCommand {
 pub struct Outcome {
     /// Increases with every outcome, so a new one can be told from the last.
     pub id: u32,
-    pub ok: bool,
-    pub message: String,
+    pub kind: OutcomeKind,
+}
+
+/// What happened; the wording is in [`crate::i18n`]. `error` is the cause, as text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutcomeKind {
+    WifiStored { ssid: String },
+    WifiFailed { error: String },
+    FirmwareInstalled { port: String },
+    FirmwareFailed { port: String, error: String },
+}
+
+impl OutcomeKind {
+    pub fn ok(&self) -> bool {
+        matches!(self, OutcomeKind::WifiStored { .. } | OutcomeKind::FirmwareInstalled { .. })
+    }
 }
 
 /// A display found on the network.
@@ -255,11 +270,11 @@ fn publish_usb(ctx: &LinkContext, link: Option<UsbLink>) {
 }
 
 /// Tells the user, through the tray, how a command ended.
-fn publish_outcome(ctx: &LinkContext, ok: bool, message: String) {
-    log(&message);
+fn publish_outcome(ctx: &LinkContext, kind: OutcomeKind) {
+    log(Lang::En.outcome(&kind));
     ctx.status.send_modify(|status| {
         let id = status.outcome.as_ref().map_or(1, |last| last.id + 1);
-        status.outcome = Some(Outcome { id, ok, message });
+        status.outcome = Some(Outcome { id, kind });
     });
 }
 
@@ -322,8 +337,8 @@ fn serve(
             Ok(LinkCommand::InstallFirmware) => return Ok(Stop::Install),
             Ok(LinkCommand::SetWifi { ssid, password }) => {
                 match firmware::set_wifi(port, &ssid, &password) {
-                    Ok(()) => publish_outcome(ctx, true, format!("WiFi settings stored. The display is joining \"{ssid}\".")),
-                    Err(err) => publish_outcome(ctx, false, format!("Could not set up WiFi: {err:#}")),
+                    Ok(()) => publish_outcome(ctx, OutcomeKind::WifiStored { ssid }),
+                    Err(err) => publish_outcome(ctx, OutcomeKind::WifiFailed { error: format!("{err:#}") }),
                 }
                 // The board restarts; ask again soon what it is doing.
                 last_probe = Instant::now().checked_sub(PROBE_INTERVAL - Duration::from_secs(3));
@@ -369,8 +384,11 @@ fn install_firmware(port_name: &str, ctx: &LinkContext) {
         }
     });
     match result {
-        Ok(()) => publish_outcome(ctx, true, format!("Display firmware installed on {port_name}.")),
-        Err(err) => publish_outcome(ctx, false, format!("Installing the firmware on {port_name} failed: {err:#}")),
+        Ok(()) => publish_outcome(ctx, OutcomeKind::FirmwareInstalled { port: port_name.to_string() }),
+        Err(err) => publish_outcome(
+            ctx,
+            OutcomeKind::FirmwareFailed { port: port_name.to_string(), error: format!("{err:#}") },
+        ),
     }
 }
 

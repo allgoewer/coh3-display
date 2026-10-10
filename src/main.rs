@@ -18,6 +18,7 @@ use tokio::sync::watch;
 use coh3_display::applog::{self, log};
 use coh3_display::display_link::{self, LinkContext, LinkStatus};
 use coh3_display::firmware::{self, BoardWifi, FirmwareState};
+use coh3_display::i18n::Lang;
 use coh3_display::log_parser::LogEvent;
 use coh3_display::model::Phase;
 use coh3_display::relic::RelicClient;
@@ -60,6 +61,10 @@ struct Args {
     #[arg(long)]
     no_tray: bool,
 
+    /// Language of the tray menu, en or de [default: the Windows display language]
+    #[arg(long, value_parser = parse_lang)]
+    lang: Option<Lang>,
+
     /// Seconds the opponents stay on the display after leaving a match (for testing)
     #[arg(long, hide = true)]
     linger_secs: Option<u64>,
@@ -79,6 +84,10 @@ struct Args {
     /// Store WiFi credentials on the display on USB, then exit; the password is read from standard input
     #[arg(long, value_name = "SSID")]
     set_wifi: Option<String>,
+}
+
+fn parse_lang(tag: &str) -> Result<Lang, String> {
+    Lang::from_tag(tag).ok_or_else(|| "expected en or de".to_string())
 }
 
 /// Opens the board and asks what it runs, giving a freshly reset one time to come back.
@@ -276,7 +285,8 @@ fn main() -> Result<()> {
 
     #[cfg(windows)]
     if !args.no_tray {
-        let ctx = tray::TrayContext { matches, links, settings: settings_tx, saved, settings_path, commands };
+        let lang = args.lang.unwrap_or_else(win::ui_language);
+        let ctx = tray::TrayContext { matches, links, settings: settings_tx, saved, settings_path, commands, lang };
         return tray::run(ctx, runtime.handle());
     }
 

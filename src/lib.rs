@@ -3,6 +3,7 @@ pub mod applog;
 pub mod autostart;
 pub mod display_link;
 pub mod firmware;
+pub mod i18n;
 pub mod log_parser;
 pub mod model;
 pub mod relic;

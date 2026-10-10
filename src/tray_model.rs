@@ -2,7 +2,8 @@
 
 use crate::display_link::{Ack, LinkStatus, UsbLink, short_map, shown_players};
 use crate::firmware::{BoardWifi, FirmwareState};
-use crate::model::{Faction, MatchInfo, Phase, PlayerInfo};
+use crate::i18n::Lang;
+use crate::model::{Faction, MatchInfo, PlayerInfo};
 use crate::settings::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,36 +69,26 @@ fn faction_label(player: &PlayerInfo) -> &str {
 }
 
 /// `FairyTale · USF 1215 · 63%`
-fn player_label(player: &PlayerInfo) -> String {
+fn player_label(player: &PlayerInfo, lang: Lang) -> String {
     let faction = faction_label(player);
     match &player.stats {
         Some(stats) => match stats.winrate() {
             Some(rate) => format!("{} · {faction} {} · {:.0}%", player.name, stats.rating, rate * 100.0),
             None => format!("{} · {faction} {}", player.name, stats.rating),
         },
-        None if player.ai => format!("{} · {faction} · AI", player.name),
-        None => format!("{} · {faction} · unrated", player.name),
-    }
-}
-
-fn ack_label(ack: Option<Ack>) -> &'static str {
-    match ack {
-        Some(Ack::Shown) => "display updated",
-        Some(Ack::NoOled) => "OLED not reachable",
-        Some(Ack::Silent) => "not answering",
-        None => "connected",
+        None if player.ai => format!("{} · {faction} · {}", player.name, lang.ai()),
+        None => format!("{} · {faction} · {}", player.name, lang.unrated()),
     }
 }
 
 /// The lines and actions for the board on USB. `embedded` is the firmware version this app
 /// can install, if it carries one.
-fn usb_entries(usb: &UsbLink, embedded: Option<&str>, entries: &mut Vec<Entry>) {
+fn usb_entries(usb: &UsbLink, embedded: Option<&str>, lang: Lang, entries: &mut Vec<Entry>) {
     let state = match (usb.installing, &usb.firmware) {
-        (Some(percent), _) => format!("installing firmware… {percent} %"),
-        (None, FirmwareState::Missing) => "no display firmware".to_string(),
-        (None, FirmwareState::Outdated(None)) => "outdated firmware".to_string(),
-        (None, FirmwareState::Outdated(Some(version))) => format!("outdated firmware {version}"),
-        (None, FirmwareState::Current(_)) => ack_label(usb.ack).to_string(),
+        (Some(percent), _) => lang.installing_firmware(percent),
+        (None, FirmwareState::Missing) => lang.no_firmware().to_string(),
+        (None, FirmwareState::Outdated(version)) => lang.outdated_firmware(version.as_deref()),
+        (None, FirmwareState::Current(_)) => lang.ack(usb.ack).to_string(),
     };
     entries.push(Entry::Label(format!("USB {}: {state}", usb.port)));
     if usb.installing.is_some() {
@@ -106,24 +97,21 @@ fn usb_entries(usb: &UsbLink, embedded: Option<&str>, entries: &mut Vec<Entry>) 
 
     let current = matches!(usb.firmware, FirmwareState::Current(_));
     if current && usb.wifi == Some(BoardWifi::Unset) {
-        entries.push(Entry::Label("WiFi on this display is not set up".to_string()));
+        entries.push(Entry::Label(lang.wifi_not_set_up().to_string()));
     }
     match (&usb.firmware, embedded) {
         (FirmwareState::Missing, Some(_)) => entries.push(Entry::Command {
-            label: "Install display firmware…".to_string(),
+            label: lang.install_firmware().to_string(),
             command: Command::InstallFirmware,
         }),
         (FirmwareState::Outdated(_), Some(version)) => entries.push(Entry::Command {
-            label: format!("Update display firmware to {version}…"),
+            label: lang.update_firmware(version),
             command: Command::InstallFirmware,
         }),
         _ => {}
     }
     if current {
-        entries.push(Entry::Command {
-            label: "Set up WiFi on this display…".to_string(),
-            command: Command::SetupWifi,
-        });
+        entries.push(Entry::Command { label: lang.set_up_wifi().to_string(), command: Command::SetupWifi });
     }
 }
 
@@ -133,63 +121,52 @@ pub fn build(
     settings: &Settings,
     autostart: bool,
     embedded: Option<&str>,
+    lang: Lang,
 ) -> MenuModel {
     let mut entries = vec![Entry::Label(format!("CoH3 Display {}", env!("CARGO_PKG_VERSION"))), Entry::Separator];
 
     let mut tooltip = match info {
         Some(info) => {
-            let ended = match info.phase {
-                Phase::Live => "",
-                Phase::Lingering => " · ended",
-                Phase::Over => " · over",
-            };
-            let title = format!("{} · {}{ended}", info.mode, map_title(&info.map));
+            let title = format!("{} · {}{}", info.mode, map_title(&info.map), lang.phase_suffix(info.phase));
             entries.push(Entry::Label(title.clone()));
             for player in shown_players(info, settings.show_own_team) {
-                entries.push(Entry::Player { label: player_label(player), profile_id: player.profile_id });
+                entries.push(Entry::Player { label: player_label(player, lang), profile_id: player.profile_id });
             }
             if let Some(err) = &info.stats_error {
-                entries.push(Entry::Label(format!("Stats unavailable: {err}")));
+                entries.push(Entry::Label(lang.stats_unavailable(err)));
             }
             format!("CoH3 Display – {title}")
         }
         None => {
-            entries.push(Entry::Label("No match yet".to_string()));
-            "CoH3 Display – no match yet".to_string()
+            entries.push(Entry::Label(lang.no_match_yet().to_string()));
+            lang.tooltip_no_match().to_string()
         }
     };
     entries.push(Entry::Separator);
 
     if let Some(usb) = &links.usb {
-        usb_entries(usb, embedded, &mut entries);
+        usb_entries(usb, embedded, lang, &mut entries);
         if let Some(percent) = usb.installing {
-            tooltip = format!("CoH3 Display – installing firmware {percent} %");
+            tooltip = lang.tooltip_installing(percent);
         }
     }
     for wifi in &links.wifi {
-        entries.push(Entry::Label(format!("WiFi {}: {}", wifi.addr, ack_label(wifi.ack))));
+        entries.push(Entry::Label(format!("{} {}: {}", lang.wifi(), wifi.addr, lang.ack(wifi.ack))));
     }
     if links.usb.is_none() && links.wifi.is_empty() {
-        let none = if settings.usb || settings.wifi { "No display found" } else { "Displays switched off" };
+        let none = if settings.usb || settings.wifi { lang.no_display_found() } else { lang.displays_off() };
         entries.push(Entry::Label(none.to_string()));
     }
     entries.push(Entry::Separator);
 
+    let check = |toggle, checked| Entry::Check { label: lang.toggle(toggle), checked, toggle };
     entries.extend([
-        Entry::Check { label: "Send over USB", checked: settings.usb, toggle: Toggle::Usb },
-        Entry::Check { label: "Send over WiFi", checked: settings.wifi, toggle: Toggle::Wifi },
-        Entry::Check { label: "Show own team too", checked: settings.show_own_team, toggle: Toggle::ShowOwnTeam },
-        Entry::Check {
-            label: "Update display firmware automatically",
-            checked: settings.auto_update_firmware,
-            toggle: Toggle::AutoUpdateFirmware,
-        },
-        Entry::Check {
-            label: "Keep last match on display",
-            checked: settings.keep_last_match,
-            toggle: Toggle::KeepLastMatch,
-        },
-        Entry::Check { label: "Start with Windows", checked: autostart, toggle: Toggle::Autostart },
+        check(Toggle::Usb, settings.usb),
+        check(Toggle::Wifi, settings.wifi),
+        check(Toggle::ShowOwnTeam, settings.show_own_team),
+        check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
+        check(Toggle::KeepLastMatch, settings.keep_last_match),
+        check(Toggle::Autostart, autostart),
         Entry::Separator,
         Entry::OpenLog,
         Entry::Quit,
@@ -212,7 +189,7 @@ mod tests {
     fn current() -> FirmwareState {
         FirmwareState::Current("0.2.0".to_string())
     }
-    use crate::model::PlayerStats;
+    use crate::model::{Phase, PlayerStats};
 
     fn player(slot: u8, team: u8, name: &str, faction: &str, rating: Option<i64>) -> PlayerInfo {
         PlayerInfo {
@@ -250,7 +227,7 @@ mod tests {
     fn marks_a_match_that_is_no_longer_on() {
         let title = |phase| {
             let info = MatchInfo { phase, ..santuario() };
-            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None))[1].clone()
+            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None, Lang::En))[1].clone()
         };
         assert_eq!(title(Phase::Live), "2v2 · Santuario");
         assert_eq!(title(Phase::Lingering), "2v2 · Santuario · ended");
@@ -281,7 +258,7 @@ mod tests {
             wifi: vec![WifiLink { addr: "10.204.28.172".parse().unwrap(), ack: Some(Ack::Silent) }],
             outcome: None,
         };
-        let model = build(Some(&santuario()), &links, &Settings::default(), false, Some("0.2.0"));
+        let model = build(Some(&santuario()), &links, &Settings::default(), false, Some("0.2.0"), Lang::En);
 
         assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Santuario");
         assert!(model.connected);
@@ -308,14 +285,14 @@ mod tests {
     #[test]
     fn lists_everyone_when_the_own_team_is_shown() {
         let settings = Settings { show_own_team: true, ..Settings::default() };
-        let model = build(Some(&santuario()), &LinkStatus::default(), &settings, false, None);
+        let model = build(Some(&santuario()), &LinkStatus::default(), &settings, false, None, Lang::En);
         let players = model.entries.iter().filter(|entry| matches!(entry, Entry::Player { .. })).count();
         assert_eq!(players, 4);
     }
 
     #[test]
     fn describes_the_empty_states() {
-        let model = build(None, &LinkStatus::default(), &Settings::default(), true, None);
+        let model = build(None, &LinkStatus::default(), &Settings::default(), true, None, Lang::En);
         assert!(!model.connected);
         assert_eq!(labels(&model)[1..], ["No match yet", "No display found"]);
         assert!(model.entries.contains(&Entry::Check {
@@ -325,12 +302,45 @@ mod tests {
         }));
 
         let off = Settings { usb: false, wifi: false, ..Settings::default() };
-        let model = build(None, &LinkStatus::default(), &off, false, None);
+        let model = build(None, &LinkStatus::default(), &off, false, None, Lang::En);
         assert_eq!(labels(&model)[2], "Displays switched off");
     }
 
+    #[test]
+    fn speaks_german() {
+        let links = LinkStatus {
+            usb: Some(usb(current(), Some(BoardWifi::Unset), Some(Ack::Shown))),
+            wifi: vec![WifiLink { addr: "10.204.28.172".parse().unwrap(), ack: Some(Ack::Silent) }],
+            outcome: None,
+        };
+        let info = MatchInfo { phase: Phase::Lingering, ..santuario() };
+        let model = build(Some(&info), &links, &Settings::default(), false, Some("0.2.0"), Lang::De);
+
+        assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Santuario · beendet");
+        assert_eq!(
+            labels(&model)[1..],
+            [
+                "2v2 · Santuario · beendet",
+                "FairyTale · USF 1215 · 63%",
+                "Senjjoy · USF · ohne Wertung",
+                "USB COM6: Display aktualisiert",
+                "WLAN ist auf diesem Display nicht eingerichtet",
+                "WLAN 10.204.28.172: antwortet nicht",
+            ]
+        );
+        assert!(model.entries.contains(&Entry::Check {
+            label: "Mit Windows starten",
+            checked: false,
+            toggle: Toggle::Autostart
+        }));
+
+        let model = build(None, &LinkStatus::default(), &Settings::default(), false, None, Lang::De);
+        assert_eq!(model.tooltip, "CoH3 Display – noch kein Match");
+        assert_eq!(labels(&model)[1..], ["Noch kein Match", "Kein Display gefunden"]);
+    }
+
     fn commands(links: &LinkStatus, embedded: Option<&str>) -> Vec<(String, Command)> {
-        build(None, links, &Settings::default(), false, embedded)
+        build(None, links, &Settings::default(), false, embedded, Lang::En)
             .entries
             .into_iter()
             .filter_map(|entry| match entry {
@@ -345,7 +355,7 @@ mod tests {
         let with = |link: UsbLink| LinkStatus { usb: Some(link), ..LinkStatus::default() };
 
         let blank = with(usb(FirmwareState::Missing, None, None));
-        let model = build(None, &blank, &Settings::default(), false, Some("0.2.0"));
+        let model = build(None, &blank, &Settings::default(), false, Some("0.2.0"), Lang::En);
         assert_eq!(labels(&model)[2], "USB COM6: no display firmware");
         assert_eq!(commands(&blank, Some("0.2.0")), [("Install display firmware…".to_string(), Command::InstallFirmware)]);
         // An app built without firmware has nothing to offer.
@@ -358,7 +368,7 @@ mod tests {
         );
 
         let fresh = with(usb(current(), Some(BoardWifi::Unset), None));
-        let model = build(None, &fresh, &Settings::default(), false, Some("0.2.0"));
+        let model = build(None, &fresh, &Settings::default(), false, Some("0.2.0"), Lang::En);
         assert!(labels(&model).contains(&"WiFi on this display is not set up".to_string()));
         assert_eq!(commands(&fresh, Some("0.2.0")), [("Set up WiFi on this display…".to_string(), Command::SetupWifi)]);
     }
@@ -368,7 +378,7 @@ mod tests {
         let mut link = usb(FirmwareState::Missing, None, None);
         link.installing = Some(42);
         let links = LinkStatus { usb: Some(link), ..LinkStatus::default() };
-        let model = build(None, &links, &Settings::default(), false, Some("0.2.0"));
+        let model = build(None, &links, &Settings::default(), false, Some("0.2.0"), Lang::En);
         assert_eq!(labels(&model)[2], "USB COM6: installing firmware… 42 %");
         assert_eq!(model.tooltip, "CoH3 Display – installing firmware 42 %");
         assert_eq!(commands(&links, Some("0.2.0")), []);

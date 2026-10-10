@@ -1,6 +1,7 @@
 //! The display firmware carried inside the app: finding out what a board runs, installing
 //! or updating it over USB, and handing it WiFi credentials.
 
+use std::fmt;
 use std::io;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -12,6 +13,8 @@ use espflash::image_format::ImageFormat;
 use espflash::image_format::idf::IdfBootloaderFormat;
 use espflash::target::{Chip, ProgressCallbacks};
 use serialport::{FlowControl, SerialPort, SerialPortType};
+
+use crate::i18n::Lang;
 
 /// The firmware built into this exe.
 #[derive(Debug, Clone, Copy)]
@@ -146,19 +149,36 @@ pub fn probe_present(port: &mut dyn SerialPort, port_name: &str) -> io::Result<O
     }
 }
 
+/// Why the board would not accept WiFi credentials. The wording is in [`crate::i18n`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialError {
+    SsidLength,
+    PasswordTooLong,
+    PasswordTooShort,
+    ControlCharacters,
+}
+
+impl fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(Lang::En.credential_error(*self))
+    }
+}
+
+impl std::error::Error for CredentialError {}
+
 /// Checks credentials against what the board accepts, so mistakes are reported before sending.
-pub fn check_credentials(ssid: &str, password: &str) -> Result<()> {
+pub fn check_credentials(ssid: &str, password: &str) -> Result<(), CredentialError> {
     if ssid.is_empty() || ssid.len() > 32 {
-        bail!("the network name must be 1 to 32 bytes long");
+        return Err(CredentialError::SsidLength);
     }
     if password.len() > 63 {
-        bail!("the password must be at most 63 bytes long");
+        return Err(CredentialError::PasswordTooLong);
     }
     if !password.is_empty() && password.len() < 8 {
-        bail!("a WiFi password has at least 8 characters (leave it empty for an open network)");
+        return Err(CredentialError::PasswordTooShort);
     }
     if ssid.chars().chain(password.chars()).any(char::is_control) {
-        bail!("network name and password must not contain tabs or other control characters");
+        return Err(CredentialError::ControlCharacters);
     }
     Ok(())
 }

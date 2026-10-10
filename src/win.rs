@@ -5,9 +5,11 @@ use std::os::windows::io::IntoRawHandle;
 
 use std::ptr::null_mut;
 
+use coh3_display::i18n::Lang;
 use windows_sys::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WPARAM,
 };
+use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 use windows_sys::Win32::System::Console::{
     ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
 };
@@ -57,6 +59,12 @@ pub fn claim_single_instance() -> bool {
         let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
         !mutex.is_null() && GetLastError() != ERROR_ALREADY_EXISTS
     }
+}
+
+/// The language Windows shows its own interface in for this user (not the regional format).
+pub fn ui_language() -> Lang {
+    // SAFETY: takes no arguments and cannot fail.
+    Lang::from_langid(unsafe { GetUserDefaultUILanguage() })
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -145,22 +153,22 @@ unsafe extern "system" fn wifi_dialog_proc(dialog: HWND, message: u32, wparam: W
 }
 
 /// Asks for a WiFi network name and password. `None` if the dialog was cancelled.
-pub fn ask_wifi(ssid: &str) -> Option<(String, String)> {
+pub fn ask_wifi(ssid: &str, lang: Lang) -> Option<(String, String)> {
     let frame = (DS_MODALFRAME | DS_CENTER | DS_SETFONT) as u32 | WS_POPUP | WS_CAPTION | WS_SYSMENU;
     // DLGTEMPLATE: style, extended style, item count, position and size in dialog units,
     // no menu, default class, title, then the font because of DS_SETFONT.
     let mut template: Vec<u16> = vec![frame as u16, (frame >> 16) as u16, 0, 0, 6, 0, 0, 220, 96, 0, 0];
-    template.extend("Set up WiFi on the display".encode_utf16().chain(Some(0)));
+    template.extend(lang.wifi_dialog_title().encode_utf16().chain(Some(0)));
     template.push(9);
     template.extend("Segoe UI".encode_utf16().chain(Some(0)));
 
     let edit = (ES_AUTOHSCROLL as u32) | WS_BORDER | WS_TABSTOP;
-    control(&mut template, CLASS_STATIC, 0, [8, 8, 204, 8], -1, "Network name (SSID):");
+    control(&mut template, CLASS_STATIC, 0, [8, 8, 204, 8], -1, lang.network_name());
     control(&mut template, CLASS_EDIT, edit, [8, 19, 204, 13], ID_SSID, "");
-    control(&mut template, CLASS_STATIC, 0, [8, 38, 204, 8], -1, "Password (empty for an open network):");
+    control(&mut template, CLASS_STATIC, 0, [8, 38, 204, 8], -1, lang.password());
     control(&mut template, CLASS_EDIT, edit | ES_PASSWORD as u32, [8, 49, 204, 13], ID_PASSWORD, "");
     control(&mut template, CLASS_BUTTON, BS_DEFPUSHBUTTON as u32 | WS_TABSTOP, [108, 74, 50, 14], IDOK, "OK");
-    control(&mut template, CLASS_BUTTON, WS_TABSTOP, [162, 74, 50, 14], IDCANCEL, "Cancel");
+    control(&mut template, CLASS_BUTTON, WS_TABSTOP, [162, 74, 50, 14], IDCANCEL, lang.cancel());
 
     // The template must start on a 4-byte boundary, which a `Vec<u16>` does not promise.
     let mut aligned = vec![0u32; template.len().div_ceil(2)];

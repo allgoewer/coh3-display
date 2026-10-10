@@ -10,6 +10,10 @@ on a small OLED driven by an ESP32-C6.
   D4 (SDA) and D5 (SCL).
 - The wire format between the two is in [PROTOCOL.md](PROTOCOL.md).
 
+The tray menu and the installer are in German when that is the Windows display language and
+in English otherwise; `--lang en` or `--lang de` overrides this for one run. The log file and
+the command line are always English.
+
 ## Building
 
 Needs Rust (stable, with the `riscv32imac-unknown-none-elf` target; the toolchain files pull
