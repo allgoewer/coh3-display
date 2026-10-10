@@ -141,7 +141,7 @@ fn faction_name(code: char) -> &'static str {
     }
 }
 
-/// `2v2 Crossing In The Woods`, plus one square per page with the current one filled.
+/// `Crossing In The Woods`, plus one square per page with the current one filled.
 /// Returns how far the map name overflows.
 fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     target: &mut D,
@@ -154,10 +154,6 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     let markers = if pages > 1 { pages.min(MAX_MARKERS) as i32 } else { 0 };
     let markers_width = if markers > 0 { markers * 7 + 2 } else { 0 };
 
-    let mut mode: String<16> = String::new();
-    let _ = write!(mode, "{} ", current.mode);
-    text(target, &mode, Point::new(1, 1), font);
-
     let mut map: String<64> = String::new();
     let mut word_start = true;
     for c in current.map.chars() {
@@ -165,8 +161,7 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
         let _ = map.push(if word_start { c.to_ascii_uppercase() } else { c });
         word_start = c == ' ';
     }
-    let x = 1 + text_width(&mode, font);
-    let area = Rectangle::new(Point::new(x, 1), Size::new((WIDTH - markers_width - x).max(0) as u32, 13));
+    let area = Rectangle::new(Point::new(1, 1), Size::new((WIDTH - markers_width - 1).max(0) as u32, 13));
     let overflow = scrolling_text(target, &map, area, font, tick);
 
     for index in 0..markers {
