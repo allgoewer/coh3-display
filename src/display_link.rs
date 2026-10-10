@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use crate::applog::log;
 use crate::firmware::{self, BoardWifi, FirmwareState};
 use crate::i18n::Lang;
+use crate::maps;
 use crate::model::{Faction, MatchInfo, Phase, PlayerInfo};
 use crate::settings::Settings;
 
@@ -23,6 +24,8 @@ use crate::settings::Settings;
 const USB_ID: (u16, u16) = (0x303A, 0x1001);
 const MAX_PLAYERS: usize = 8;
 const MAX_TEXT: usize = 24;
+/// Map titles get more room: the longest is "Überquerung des Rapido-Flusses".
+pub const MAX_MAP: usize = 32;
 const RESEND: Duration = Duration::from_secs(5);
 const RETRY: Duration = Duration::from_secs(2);
 /// How often a link that is switched off checks whether it was switched on again.
@@ -95,6 +98,8 @@ pub struct LinkContext {
     pub matches: watch::Receiver<Option<MatchInfo>>,
     pub settings: watch::Receiver<Settings>,
     pub status: Arc<watch::Sender<LinkStatus>>,
+    /// The language of what the display shows: the map's title.
+    pub lang: Lang,
 }
 
 /// Why a link's serve loop ended without an error.
@@ -109,11 +114,11 @@ enum Stop {
 
 /// Cuts text down to what the display can show: no control characters, Latin-1 only.
 fn sanitize(text: &str) -> String {
-    text.chars()
-        .filter(|c| !c.is_control())
-        .map(|c| if (c as u32) <= 0xFF { c } else { '?' })
-        .take(MAX_TEXT)
-        .collect()
+    sanitize_to(text, MAX_TEXT)
+}
+
+fn sanitize_to(text: &str, max: usize) -> String {
+    text.chars().filter(|c| !c.is_control()).map(|c| if (c as u32) <= 0xFF { c } else { '?' }).take(max).collect()
 }
 
 /// `alamein_4p` -> `alamein`
@@ -152,8 +157,9 @@ pub fn shown_players(info: &MatchInfo, show_own_team: bool) -> Vec<&PlayerInfo> 
 }
 
 /// Encodes a match as one protocol frame.
-pub fn encode(info: &MatchInfo, show_own_team: bool) -> String {
-    let mut frame = format!("M\t{}\t{}\n", sanitize(&info.mode), sanitize(short_map(&info.map)));
+pub fn encode(info: &MatchInfo, show_own_team: bool, lang: Lang) -> String {
+    let map = sanitize_to(&maps::title(&info.map, lang), MAX_MAP);
+    let mut frame = format!("M\t{}\t{map}\n", sanitize(&info.mode));
 
     for player in shown_players(info, show_own_team).into_iter().take(MAX_PLAYERS) {
         let stats = match &player.stats {
@@ -178,9 +184,11 @@ pub const IDLE_FRAME: &str = "I\n";
 
 /// What the display should be told right now: the match while it is worth showing,
 /// otherwise to go idle.
-pub fn frame_for(info: Option<&MatchInfo>, settings: &Settings) -> String {
+pub fn frame_for(info: Option<&MatchInfo>, settings: &Settings, lang: Lang) -> String {
     match info {
-        Some(info) if info.phase != Phase::Over || settings.keep_last_match => encode(info, settings.show_own_team),
+        Some(info) if info.phase != Phase::Over || settings.keep_last_match => {
+            encode(info, settings.show_own_team, lang)
+        }
         _ => IDLE_FRAME.to_string(),
     }
 }
@@ -250,13 +258,18 @@ fn send_frame(port: &mut dyn SerialPort, frame: &str) -> io::Result<Ack> {
 }
 
 /// Sends one match to the display and reports what it answered.
-pub fn send_once(port_name: Option<&str>, info: &MatchInfo, show_own_team: bool) -> anyhow::Result<Ack> {
+pub fn send_once(
+    port_name: Option<&str>,
+    info: &MatchInfo,
+    show_own_team: bool,
+    lang: Lang,
+) -> anyhow::Result<Ack> {
     let port_name = match port_name {
         Some(name) => name.to_string(),
         None => detect_port().ok_or_else(|| anyhow::anyhow!("none found"))?,
     };
     let mut port = open(&port_name)?;
-    Ok(send_frame(port.as_mut(), &encode(info, show_own_team))?)
+    Ok(send_frame(port.as_mut(), &encode(info, show_own_team, lang))?)
 }
 
 fn publish_usb(ctx: &LinkContext, link: Option<UsbLink>) {
@@ -348,7 +361,7 @@ fn serve(
 
         let is_display = matches!(link.firmware, FirmwareState::Current(_));
         if is_display && (match_changed || settings_changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND)) {
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings);
+            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings, ctx.lang);
             let ack = send_frame(port, &frame)?;
             if link.ack != Some(ack) {
                 log(format!("Display on {port_name}: {}", ack.describe()));
@@ -482,15 +495,15 @@ mod tests {
     fn sends_idle_instead_of_a_match_that_is_over() {
         let settings = Settings::default();
         let mut info = two_v_two();
-        assert_eq!(frame_for(None, &settings), "I\n");
-        assert!(frame_for(Some(&info), &settings).starts_with("M\t2v2\talamein\n"));
+        assert_eq!(frame_for(None, &settings, Lang::En), "I\n");
+        assert!(frame_for(Some(&info), &settings, Lang::En).starts_with("M\t2v2\tEl Alamein\n"));
         info.phase = Phase::Lingering;
-        assert!(frame_for(Some(&info), &settings).starts_with("M\t"));
+        assert!(frame_for(Some(&info), &settings, Lang::En).starts_with("M\t"));
         info.phase = Phase::Over;
-        assert_eq!(frame_for(Some(&info), &settings), "I\n");
+        assert_eq!(frame_for(Some(&info), &settings, Lang::En), "I\n");
 
         let keep = Settings { keep_last_match: true, ..settings };
-        assert!(frame_for(Some(&info), &keep).starts_with("M\t"));
+        assert!(frame_for(Some(&info), &keep, Lang::En).starts_with("M\t"));
     }
 
     fn two_v_two() -> MatchInfo {
@@ -507,8 +520,8 @@ mod tests {
         let mut info = two_v_two();
         info.local_profile_id = Some(100);
         assert_eq!(
-            encode(&info, false),
-            "M\t2v2\talamein\n\
+            encode(&info, false, Lang::En),
+            "M\t2v2\tEl Alamein\n\
              P\tA\t1284\t164\t135\t3\tde\tVon_Dolofon\n\
              P\tB\t-\t-\t-\t-\t-\tSaulek\n\
              E\n"
@@ -524,7 +537,7 @@ mod tests {
         let mut info = two_v_two();
         info.local_profile_id = Some(100);
         assert_eq!(shown_players(&info, true).len(), 4);
-        assert_eq!(encode(&info, true).lines().filter(|l| l.starts_with('P')).count(), 4);
+        assert_eq!(encode(&info, true, Lang::En).lines().filter(|l| l.starts_with('P')).count(), 4);
     }
 
     #[test]
@@ -538,8 +551,28 @@ mod tests {
 
     #[test]
     fn names_are_made_safe_for_the_display() {
-        let frame = encode(&info(vec![player(0, 0, "Tab\there Paweł and a very long tail", "frontend", None)]), false);
+        let players = vec![player(0, 0, "Tab\there Paweł and a very long tail", "frontend", None)];
+        let frame = encode(&info(players), false, Lang::En);
         assert_eq!(frame.lines().nth(1).unwrap(), "P\t?\t-\t-\t-\t-\t-\tTabhere Pawe? and a very");
+    }
+
+    #[test]
+    fn sends_the_maps_title_in_the_apps_language() {
+        let rapido = MatchInfo { map: "rapido_river_8p".to_string(), ..two_v_two() };
+        assert!(encode(&rapido, false, Lang::En).starts_with("M\t2v2\tRapido River Crossing\n"));
+        let frame = encode(&rapido, false, Lang::De);
+        assert!(frame.starts_with("M\t2v2\tÜberquerung des Rapido-Flusses\n"));
+
+        // The longest title there is, with a two-byte character, fits the firmware's field.
+        let mut parser = device::Parser::new();
+        let parsed = frame.lines().find_map(|line| parser.feed_line(line));
+        let Some(device::Frame::Match(parsed)) = parsed else {
+            panic!("frame ends with E, got {parsed:?}");
+        };
+        assert_eq!(parsed.map.as_str(), "Überquerung des Rapido-Flusses");
+
+        let unknown = MatchInfo { map: "some_new_map_6p".to_string(), ..two_v_two() };
+        assert!(encode(&unknown, false, Lang::De).starts_with("M\t2v2\tSome New Map\n"));
     }
 
     #[test]
@@ -557,7 +590,7 @@ mod tests {
 
     #[test]
     fn firmware_parser_understands_encoded_frames() {
-        let frame = encode(&two_v_two(), false);
+        let frame = encode(&two_v_two(), false, Lang::En);
 
         let mut parser = device::Parser::new();
         let mut parsed = None;
@@ -576,7 +609,7 @@ mod tests {
         assert_eq!(parser.feed_line("E"), None);
         assert_eq!(device::parse_datagram(IDLE_FRAME.as_bytes()), Some(device::Frame::Idle));
 
-        assert_eq!((parsed.mode.as_str(), parsed.map.as_str()), ("2v2", "alamein"));
+        assert_eq!((parsed.mode.as_str(), parsed.map.as_str()), ("2v2", "El Alamein"));
         assert_eq!(parsed.players.len(), 4);
         let rated = &parsed.players[0];
         assert_eq!((rated.faction, rated.elo, rated.name.as_str()), ('G', Some(1369), "Nullgerät"));
@@ -590,6 +623,6 @@ mod tests {
     #[test]
     fn sends_at_most_eight_players() {
         let players = (0..10).map(|i| player(i, i % 2, "x", "germans", None)).collect();
-        assert_eq!(encode(&info(players), false).lines().filter(|l| l.starts_with('P')).count(), 8);
+        assert_eq!(encode(&info(players), false, Lang::En).lines().filter(|l| l.starts_with('P')).count(), 8);
     }
 }

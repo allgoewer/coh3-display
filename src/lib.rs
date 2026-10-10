@@ -5,6 +5,7 @@ pub mod display_link;
 pub mod firmware;
 pub mod i18n;
 pub mod log_parser;
+pub mod maps;
 pub mod model;
 pub mod relic;
 pub mod render;

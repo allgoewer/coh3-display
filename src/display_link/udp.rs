@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, encode, frame_for};
 use crate::applog::log;
+use crate::i18n::Lang;
 use crate::model::MatchInfo;
 
 /// Displays broadcast their beacon to this port.
@@ -160,7 +161,7 @@ fn serve(socket: &UdpSocket, fixed: Option<IpAddr>, ctx: &mut LinkContext) -> io
         });
 
         if match_changed || settings_changed || found_new || last_sent.is_none_or(|at| at.elapsed() >= RESEND) {
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings);
+            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings, ctx.lang);
             send(socket, &mut devices, &frame);
             last_sent = Some(Instant::now());
         }
@@ -205,6 +206,7 @@ pub fn send_once(
     fixed: Option<IpAddr>,
     info: &MatchInfo,
     show_own_team: bool,
+    lang: Lang,
     wait: Duration,
 ) -> io::Result<Vec<(IpAddr, Ack)>> {
     let socket = bind(fixed)?;
@@ -222,7 +224,7 @@ pub fn send_once(
         receive(&socket, &mut devices)?;
     }
 
-    let frame = encode(info, show_own_team);
+    let frame = encode(info, show_own_team, lang);
     let mut answers = Vec::new();
     for addr in devices.keys() {
         socket.send_to(frame.as_bytes(), SocketAddr::new(*addr, FRAME_PORT))?;

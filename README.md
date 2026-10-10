@@ -14,6 +14,12 @@ The tray menu and the installer are in German when that is the Windows display l
 in English otherwise; `--lang en` or `--lang de` overrides this for one run. The log file and
 the command line are always English.
 
+Maps are shown under the game's own titles, in the same language. The game's log only names
+the scenario file, so the titles come from a table in the app, [`src/maps.tsv`](src/maps.tsv),
+generated from the data the [COH Stats](https://github.com/cohstats/coh3-data) project
+extracts from the game (MIT licence). After a patch that adds maps, refresh it with
+`cargo run --example update_maps`; until then a new map shows under its file name.
+
 ## Building
 
 Needs Rust (stable, with the `riscv32imac-unknown-none-elf` target; the toolchain files pull

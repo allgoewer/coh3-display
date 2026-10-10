@@ -61,7 +61,7 @@ struct Args {
     #[arg(long)]
     no_tray: bool,
 
-    /// Language of the tray menu, en or de [default: the Windows display language]
+    /// Language of the tray menu and of map names, en or de [default: the Windows display language]
     #[arg(long, value_parser = parse_lang)]
     lang: Option<Lang>,
 
@@ -179,7 +179,7 @@ fn default_log_path() -> Result<PathBuf> {
 }
 
 /// Prints the latest match, sends it to the displays once and returns.
-async fn run_once(args: &Args, mut tail: LogTail, client: RelicClient, settings: Settings) -> Result<()> {
+async fn run_once(args: &Args, mut tail: LogTail, client: RelicClient, settings: Settings, lang: Lang) -> Result<()> {
     let latest = tail
         .poll()
         .with_context(|| format!("could not read {}", tail.path().display()))?
@@ -194,14 +194,14 @@ async fn run_once(args: &Args, mut tail: LogTail, client: RelicClient, settings:
     print!("{}", render(&info));
 
     if settings.usb {
-        match display_link::send_once(args.serial.as_deref(), &info, settings.show_own_team) {
+        match display_link::send_once(args.serial.as_deref(), &info, settings.show_own_team, lang) {
             Ok(ack) => eprintln!("Display on USB: {}", ack.describe()),
             Err(err) => eprintln!("Display on USB: {err:#}"),
         }
     }
     if settings.wifi {
         let wait = Duration::from_secs(5);
-        match display_link::udp::send_once(args.display_addr, &info, settings.show_own_team, wait) {
+        match display_link::udp::send_once(args.display_addr, &info, settings.show_own_team, lang, wait) {
             Ok(answers) if answers.is_empty() => eprintln!("Display on WiFi: none found"),
             Ok(answers) => {
                 for (addr, ack) in answers {
@@ -228,6 +228,10 @@ fn main() -> Result<()> {
     };
     let client = RelicClient::new()?;
     let tail = LogTail::new(&path);
+    #[cfg(windows)]
+    let lang = args.lang.unwrap_or_else(win::ui_language);
+    #[cfg(not(windows))]
+    let lang = args.lang.unwrap_or_default();
 
     let settings_path = Settings::path();
     let saved = settings_path.as_deref().map(Settings::load).unwrap_or_default();
@@ -240,7 +244,7 @@ fn main() -> Result<()> {
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     if args.once {
-        return runtime.block_on(run_once(&args, tail, client, settings));
+        return runtime.block_on(run_once(&args, tail, client, settings, lang));
     }
 
     #[cfg(windows)]
@@ -256,7 +260,7 @@ fn main() -> Result<()> {
     let (settings_tx, settings_rx) = watch::channel(settings);
     let (status_tx, links) = watch::channel(LinkStatus::default());
     let settings_tx = Arc::new(settings_tx);
-    let ctx = LinkContext { matches: matches.clone(), settings: settings_rx, status: Arc::new(status_tx) };
+    let ctx = LinkContext { matches: matches.clone(), settings: settings_rx, status: Arc::new(status_tx), lang };
     let (commands, command_rx) = mpsc::channel();
     display_link::spawn(args.serial.clone(), ctx.clone(), command_rx);
     display_link::udp::spawn(args.display_addr, ctx);
@@ -285,7 +289,6 @@ fn main() -> Result<()> {
 
     #[cfg(windows)]
     if !args.no_tray {
-        let lang = args.lang.unwrap_or_else(win::ui_language);
         let ctx = tray::TrayContext { matches, links, settings: settings_tx, saved, settings_path, commands, lang };
         return tray::run(ctx, runtime.handle());
     }

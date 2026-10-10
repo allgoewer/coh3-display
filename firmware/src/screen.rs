@@ -141,7 +141,7 @@ fn faction_name(code: char) -> &'static str {
     }
 }
 
-/// `Crossing In The Woods`, plus one square per page with the current one filled.
+/// `Crossing in the Woods`, plus one square per page with the current one filled.
 /// Returns how far the map name overflows.
 fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     target: &mut D,
@@ -154,12 +154,15 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     let markers = if pages > 1 { pages.min(MAX_MARKERS) as i32 } else { 0 };
     let markers_width = if markers > 0 { markers * 7 + 2 } else { 0 };
 
+    // The app sends the map's title. Before 0.3.3 of this firmware it sent the scenario's
+    // file name (`crossing_in_the_woods`), which is all lower case and still gets tidied up.
+    let is_title = current.map.chars().any(char::is_uppercase);
     let mut map: String<64> = String::new();
-    let mut word_start = true;
+    let mut word_start = !is_title;
     for c in current.map.chars() {
-        let c = if c == '_' { ' ' } else { c };
+        let c = if c == '_' && !is_title { ' ' } else { c };
         let _ = map.push(if word_start { c.to_ascii_uppercase() } else { c });
-        word_start = c == ' ';
+        word_start = c == ' ' && !is_title;
     }
     let area = Rectangle::new(Point::new(1, 1), Size::new((WIDTH - markers_width - 1).max(0) as u32, 13));
     let overflow = scrolling_text(target, &map, area, font, tick);

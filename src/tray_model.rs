@@ -1,8 +1,9 @@
 //! What the tray menu shows, worked out from the app's state without touching any GUI.
 
-use crate::display_link::{Ack, LinkStatus, UsbLink, short_map, shown_players};
+use crate::display_link::{Ack, LinkStatus, UsbLink, shown_players};
 use crate::firmware::{BoardWifi, FirmwareState};
 use crate::i18n::Lang;
+use crate::maps;
 use crate::model::{Faction, MatchInfo, PlayerInfo};
 use crate::settings::Settings;
 
@@ -42,20 +43,6 @@ pub struct MenuModel {
     /// At least one display confirmed it is showing the current match.
     pub connected: bool,
     pub entries: Vec<Entry>,
-}
-
-/// `crossing_in_the_woods_4p` -> `Crossing In The Woods`
-pub fn map_title(map: &str) -> String {
-    short_map(map)
-        .split('_')
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            let first = chars.next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-            first + chars.as_str()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn faction_label(player: &PlayerInfo) -> &str {
@@ -127,7 +114,8 @@ pub fn build(
 
     let mut tooltip = match info {
         Some(info) => {
-            let title = format!("{} · {}{}", info.mode, map_title(&info.map), lang.phase_suffix(info.phase));
+            let map = maps::title(&info.map, lang);
+            let title = format!("{} · {map}{}", info.mode, lang.phase_suffix(info.phase));
             entries.push(Entry::Label(title.clone()));
             for player in shown_players(info, settings.show_own_team) {
                 entries.push(Entry::Player { label: player_label(player, lang), profile_id: player.profile_id });
@@ -246,12 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn titles_maps() {
-        assert_eq!(map_title("crossing_in_the_woods_4p"), "Crossing In The Woods");
-        assert_eq!(map_title("santuario_4p"), "Santuario");
-    }
-
-    #[test]
     fn shows_the_match_and_the_displays() {
         let links = LinkStatus {
             usb: Some(usb(current(), Some(BoardWifi::Up(None)), Some(Ack::Shown))),
@@ -313,14 +295,14 @@ mod tests {
             wifi: vec![WifiLink { addr: "10.204.28.172".parse().unwrap(), ack: Some(Ack::Silent) }],
             outcome: None,
         };
-        let info = MatchInfo { phase: Phase::Lingering, ..santuario() };
+        let info = MatchInfo { map: "rural_town_4p".to_string(), phase: Phase::Lingering, ..santuario() };
         let model = build(Some(&info), &links, &Settings::default(), false, Some("0.2.0"), Lang::De);
 
-        assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Santuario · beendet");
+        assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Pachino-Ackerland · beendet");
         assert_eq!(
             labels(&model)[1..],
             [
-                "2v2 · Santuario · beendet",
+                "2v2 · Pachino-Ackerland · beendet",
                 "FairyTale · USF 1215 · 63%",
                 "Senjjoy · USF · ohne Wertung",
                 "USB COM6: Display aktualisiert",
