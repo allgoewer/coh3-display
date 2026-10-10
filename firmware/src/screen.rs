@@ -39,45 +39,71 @@ const HOST_TIMEOUT_TICKS: u32 = 750;
 /// The idle tank drives one pixel every this many ticks, about 8 pixels a second.
 const IDLE_STEP_TICKS: u32 = 3;
 
-/// The idle tank, facing right; it is mirrored to drive left. [`draw_idle`] cuts gaps into
-/// the row of [`TANK_TREAD`], so the tread appears to roll.
-const TANK: [&str; 10] = [
-    ".........#########..........",
-    "........###########.........",
-    "........####################",
-    "........###########.........",
-    "...######################...",
+/// The idle tanks, facing right; they are mirrored to drive left. [`draw_idle`] cuts gaps
+/// into the last row, so the tread appears to roll.
+///
+/// A German Tiger: low and boxy, with a long gun ending in a muzzle brake and a row of
+/// large road wheels.
+const TIGER: &[&str] = &[
+    "............###.................",
+    "..........############.......###",
+    "..........######################",
+    "..........############.......###",
+    "..........############..........",
+    "..##########################....",
+    ".############################...",
+    ".############################...",
+    "###############################.",
+    "#.###.###.###.###.###.###.###.#.",
+    "#.###.###.###.###.###.###.###.#.",
+    ".#############################..",
+];
+/// An American Sherman: tall, with a rounded turret, a short gun, a star on its side and
+/// small wheels in three pairs.
+const SHERMAN: &[&str] = &[
+    "..........######............",
+    ".........########...........",
+    "........#################...",
+    "........##########..........",
+    ".....################.......",
+    "...########.###########.....",
+    "..########...############...",
+    "..#########.##############..",
     ".##########################.",
-    "############################",
-    "#..##..##..##..##..##..##..#",
-    "#..##..##..##..##..##..##..#",
+    "##.##.##...##.##...##.##.###",
+    "##.##.##...##.##...##.##.###",
     ".##########################.",
 ];
-const TANK_WIDTH: i32 = 28;
-const TANK_HEIGHT: i32 = TANK.len() as i32;
-const TANK_TREAD: usize = 9;
 
-/// Where the idle tank is: its top-left corner, and +1 when it drives right, -1 for left.
+/// The idle tank: which one, where its top-left corner is, and its heading (+1 when it
+/// drives right, -1 for left).
 struct Tank {
+    sprite: &'static [&'static str],
     at: Point,
     heading: i32,
 }
 
 impl Tank {
-    /// A tank just outside the screen, about to drive across it on a random row of the
-    /// blue area, from a random side.
-    fn entering() -> Self {
-        let random = Rng::new().random();
-        let rows = (64 - HEADER_HEIGHT - TANK_HEIGHT + 1) as u32;
-        let heading = if random & (1 << 16) == 0 { 1 } else { -1 };
-        let x = if heading > 0 { -TANK_WIDTH } else { WIDTH };
-        Tank { at: Point::new(x, HEADER_HEIGHT + (random % rows) as i32), heading }
+    fn width(&self) -> i32 {
+        self.sprite[0].len() as i32
     }
 
-    /// Drives one pixel on. A tank that has left the screen comes back on another row.
+    /// A tank of either side just outside the screen, about to drive across it on a random
+    /// row of the blue area, from a random side.
+    fn entering() -> Self {
+        let random = Rng::new().random();
+        let sprite = if random & (1 << 17) == 0 { TIGER } else { SHERMAN };
+        let mut tank = Tank { sprite, at: Point::zero(), heading: if random & (1 << 16) == 0 { 1 } else { -1 } };
+        let rows = (64 - HEADER_HEIGHT - sprite.len() as i32 + 1) as u32;
+        let x = if tank.heading > 0 { -tank.width() } else { WIDTH };
+        tank.at = Point::new(x, HEADER_HEIGHT + (random % rows) as i32);
+        tank
+    }
+
+    /// Drives one pixel on. A tank that has left the screen makes way for the next one.
     fn advance(&mut self) {
         self.at.x += self.heading;
-        if self.at.x < -TANK_WIDTH || self.at.x > WIDTH {
+        if self.at.x < -self.width() || self.at.x > WIDTH {
             *self = Tank::entering();
         }
     }
@@ -272,12 +298,12 @@ fn draw_status<D: DrawTarget<Color = BinaryColor>>(target: &mut D) {
 
 fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, tank: &Tank) {
     let _ = target.clear(BinaryColor::Off);
-    let pixels = TANK.iter().enumerate().flat_map(|(row, line)| {
+    let pixels = tank.sprite.iter().enumerate().flat_map(|(row, line)| {
         line.bytes().enumerate().filter_map(move |(column, cell)| {
-            let column = if tank.heading > 0 { column as i32 } else { TANK_WIDTH - 1 - column as i32 };
+            let column = if tank.heading > 0 { column as i32 } else { tank.width() - 1 - column as i32 };
             let at = tank.at + Point::new(column, row as i32);
             // The tread's gaps stay where they are on the ground while the tank moves over them.
-            let lit = cell == b'#' && (row != TANK_TREAD || at.x.rem_euclid(3) != 0);
+            let lit = cell == b'#' && (row + 1 != tank.sprite.len() || at.x.rem_euclid(3) != 0);
             lit.then_some(Pixel(at, BinaryColor::On))
         })
     });
