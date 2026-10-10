@@ -23,8 +23,8 @@ use crate::{DISPLAY_READY, FRAME};
 const WIDTH: i32 = 128;
 /// The panel's top 16 rows are yellow, the rest blue.
 const HEADER_HEIGHT: i32 = 16;
-/// Page markers in the header; more players than this simply get no marker of their own.
-const MAX_MARKERS: usize = 4;
+/// Page markers in the header: two rows of four, one for each player a frame can carry.
+const MAX_MARKERS: usize = 8;
 
 /// Animation step; scrolling text moves one pixel per tick.
 const TICK: Duration = Duration::from_millis(40);
@@ -183,7 +183,8 @@ fn faction_name(code: char) -> &'static str {
     }
 }
 
-/// `Crossing in the Woods`, plus one square per page with the current one filled.
+/// `Crossing in the Woods`, plus one square per page with the current one filled; from
+/// three pages on the squares are stacked in two rows.
 /// Returns how far the map name overflows.
 fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     target: &mut D,
@@ -194,7 +195,10 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
 ) -> i32 {
     let font = &FONT_7X13_BOLD;
     let markers = if pages > 1 { pages.min(MAX_MARKERS) as i32 } else { 0 };
-    let markers_width = if markers > 0 { markers * 7 + 2 } else { 0 };
+    // Two pages sit side by side; more are stacked in two rows to leave the map its room.
+    let rows = if markers > 2 { 2 } else { 1 };
+    let columns = (markers + rows - 1) / rows;
+    let markers_width = if markers > 0 { columns * 7 + 2 } else { 0 };
 
     // The app sends the map's title. Before 0.3.3 of this firmware it sent the scenario's
     // file name (`crossing_in_the_woods`), which is all lower case and still gets tidied up.
@@ -210,7 +214,10 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     let overflow = scrolling_text(target, &map, area, font, tick);
 
     for index in 0..markers {
-        let square = Rectangle::new(Point::new(WIDTH - (markers - index) * 7, 5), Size::new(5, 5));
+        // Row by row, like text: 1 2 above 3 4.
+        let x = WIDTH - (columns - index % columns) * 7;
+        let y = if rows == 1 { 5 } else { 2 + index / columns * 7 };
+        let square = Rectangle::new(Point::new(x, y), Size::new(5, 5));
         let style = if index as usize == page {
             PrimitiveStyle::with_fill(BinaryColor::On)
         } else {
