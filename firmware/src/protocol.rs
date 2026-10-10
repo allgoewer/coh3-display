@@ -6,6 +6,8 @@ use heapless::{String, Vec};
 
 pub const MAX_PLAYERS: usize = 8;
 pub const MAX_LINE: usize = 128;
+/// The brightness of a match whose frame does not say.
+pub const NORMAL_BRIGHTNESS: u8 = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Player {
@@ -33,6 +35,8 @@ impl Player {
 pub struct Match {
     pub mode: String<8>,
     pub map: String<48>,
+    /// How bright to show the match: 1 low, 2 normal, 3 high.
+    pub brightness: u8,
     pub players: Vec<Player, MAX_PLAYERS>,
 }
 
@@ -88,8 +92,16 @@ impl Parser {
                 self.pending = Some(Match {
                     mode: fit(fields.next().unwrap_or("")),
                     map: fit(fields.next().unwrap_or("")),
+                    brightness: NORMAL_BRIGHTNESS,
                     players: Vec::new(),
                 });
+                None
+            }
+            "B" => {
+                let level = fields.next().and_then(|level| level.parse().ok()).filter(|level| (1..=3).contains(level));
+                if let (Some(pending), Some(level)) = (&mut self.pending, level) {
+                    pending.brightness = level;
+                }
                 None
             }
             "P" => {

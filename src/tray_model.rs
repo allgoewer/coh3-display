@@ -5,7 +5,7 @@ use crate::firmware::{BoardWifi, FirmwareState};
 use crate::i18n::Lang;
 use crate::maps;
 use crate::model::{Faction, MatchInfo, PlayerInfo};
-use crate::settings::Settings;
+use crate::settings::{Brightness, Settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Toggle {
@@ -31,6 +31,8 @@ pub enum Entry {
     /// Opens the player's coh3stats.com page when a profile is known.
     Player { label: String, profile_id: Option<u64> },
     Check { label: &'static str, checked: bool, toggle: Toggle },
+    /// A submenu to pick the display's brightness from; `current` is the one ticked.
+    Brightness { label: &'static str, options: Vec<(&'static str, Brightness)>, current: Brightness },
     /// Something to do with the board on USB; asks before it acts.
     Command { label: String, command: Command },
     OpenLog,
@@ -155,6 +157,11 @@ pub fn build(
         check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
         check(Toggle::KeepLastMatch, settings.keep_last_match),
         check(Toggle::Autostart, autostart),
+        Entry::Brightness {
+            label: lang.brightness_menu(),
+            options: Brightness::ALL.map(|brightness| (lang.brightness(brightness), brightness)).to_vec(),
+            current: settings.brightness,
+        },
         Entry::Separator,
         Entry::OpenLog,
         Entry::Quit,
@@ -282,6 +289,11 @@ mod tests {
             checked: true,
             toggle: Toggle::Autostart
         }));
+        assert!(model.entries.contains(&Entry::Brightness {
+            label: "Display brightness",
+            options: vec![("Low", Brightness::Low), ("Normal", Brightness::Normal), ("High", Brightness::High)],
+            current: Brightness::Normal,
+        }));
 
         let off = Settings { usb: false, wifi: false, ..Settings::default() };
         let model = build(None, &LinkStatus::default(), &off, false, None, Lang::En);
@@ -316,7 +328,13 @@ mod tests {
             toggle: Toggle::Autostart
         }));
 
-        let model = build(None, &LinkStatus::default(), &Settings::default(), false, None, Lang::De);
+        let dim = Settings { brightness: Brightness::Low, ..Settings::default() };
+        let model = build(None, &LinkStatus::default(), &dim, false, None, Lang::De);
+        assert!(model.entries.contains(&Entry::Brightness {
+            label: "Display-Helligkeit",
+            options: vec![("Niedrig", Brightness::Low), ("Normal", Brightness::Normal), ("Hoch", Brightness::High)],
+            current: Brightness::Low,
+        }));
         assert_eq!(model.tooltip, "CoH3 Display – noch kein Match");
         assert_eq!(labels(&model)[1..], ["Noch kein Match", "Kein Display gefunden"]);
     }

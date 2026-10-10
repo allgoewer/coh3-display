@@ -10,6 +10,7 @@ use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, encode, fra
 use crate::applog::log;
 use crate::i18n::Lang;
 use crate::model::MatchInfo;
+use crate::settings::Brightness;
 
 /// Displays broadcast their beacon to this port.
 pub const BEACON_PORT: u16 = 42424;
@@ -207,6 +208,7 @@ pub fn send_once(
     info: &MatchInfo,
     show_own_team: bool,
     lang: Lang,
+    brightness: Brightness,
     wait: Duration,
 ) -> io::Result<Vec<(IpAddr, Ack)>> {
     let socket = bind(fixed)?;
@@ -224,7 +226,7 @@ pub fn send_once(
         receive(&socket, &mut devices)?;
     }
 
-    let frame = encode(info, show_own_team, lang);
+    let frame = encode(info, show_own_team, lang, brightness);
     let mut answers = Vec::new();
     for addr in devices.keys() {
         socket.send_to(frame.as_bytes(), SocketAddr::new(*addr, FRAME_PORT))?;

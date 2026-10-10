@@ -6,6 +6,29 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// How bright the display shows a match. Idle is always as dim as the panel goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Brightness {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+impl Brightness {
+    pub const ALL: [Brightness; 3] = [Brightness::Low, Brightness::Normal, Brightness::High];
+
+    /// The level as the display protocol numbers it.
+    pub fn level(self) -> u8 {
+        match self {
+            Brightness::Low => 1,
+            Brightness::Normal => 2,
+            Brightness::High => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -21,11 +44,20 @@ pub struct Settings {
     /// Keep the last match on the display after it is over. For trying things out without
     /// a game running; costs OLED lifetime.
     pub keep_last_match: bool,
+    /// How bright the display shows a match.
+    pub brightness: Brightness,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { usb: true, wifi: true, show_own_team: false, auto_update_firmware: true, keep_last_match: false }
+        Self {
+            usb: true,
+            wifi: true,
+            show_own_team: false,
+            auto_update_firmware: true,
+            keep_last_match: false,
+            brightness: Brightness::Normal,
+        }
     }
 }
 
@@ -65,6 +97,7 @@ mod tests {
             show_own_team: true,
             auto_update_firmware: false,
             keep_last_match: true,
+            brightness: Brightness::Low,
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);

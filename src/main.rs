@@ -194,14 +194,16 @@ async fn run_once(args: &Args, mut tail: LogTail, client: RelicClient, settings:
     print!("{}", render(&info));
 
     if settings.usb {
-        match display_link::send_once(args.serial.as_deref(), &info, settings.show_own_team, lang) {
+        let (own_team, brightness) = (settings.show_own_team, settings.brightness);
+        match display_link::send_once(args.serial.as_deref(), &info, own_team, lang, brightness) {
             Ok(ack) => eprintln!("Display on USB: {}", ack.describe()),
             Err(err) => eprintln!("Display on USB: {err:#}"),
         }
     }
     if settings.wifi {
         let wait = Duration::from_secs(5);
-        match display_link::udp::send_once(args.display_addr, &info, settings.show_own_team, lang, wait) {
+        let (own_team, brightness) = (settings.show_own_team, settings.brightness);
+        match display_link::udp::send_once(args.display_addr, &info, own_team, lang, brightness, wait) {
             Ok(answers) if answers.is_empty() => eprintln!("Display on WiFi: none found"),
             Ok(answers) => {
                 for (addr, ack) in answers {

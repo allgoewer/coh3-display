@@ -18,7 +18,7 @@ use crate::firmware::{self, BoardWifi, FirmwareState};
 use crate::i18n::Lang;
 use crate::maps;
 use crate::model::{Faction, MatchInfo, Phase, PlayerInfo};
-use crate::settings::Settings;
+use crate::settings::{Brightness, Settings};
 
 /// USB-Serial-JTAG of Espressif chips.
 const USB_ID: (u16, u16) = (0x303A, 0x1001);
@@ -157,9 +157,9 @@ pub fn shown_players(info: &MatchInfo, show_own_team: bool) -> Vec<&PlayerInfo> 
 }
 
 /// Encodes a match as one protocol frame.
-pub fn encode(info: &MatchInfo, show_own_team: bool, lang: Lang) -> String {
+pub fn encode(info: &MatchInfo, show_own_team: bool, lang: Lang, brightness: Brightness) -> String {
     let map = sanitize_to(&maps::title(&info.map, lang), MAX_MAP);
-    let mut frame = format!("M\t{}\t{map}\n", sanitize(&info.mode));
+    let mut frame = format!("M\t{}\t{map}\nB\t{}\n", sanitize(&info.mode), brightness.level());
 
     for player in shown_players(info, show_own_team).into_iter().take(MAX_PLAYERS) {
         let stats = match &player.stats {
@@ -187,7 +187,7 @@ pub const IDLE_FRAME: &str = "I\n";
 pub fn frame_for(info: Option<&MatchInfo>, settings: &Settings, lang: Lang) -> String {
     match info {
         Some(info) if info.phase != Phase::Over || settings.keep_last_match => {
-            encode(info, settings.show_own_team, lang)
+            encode(info, settings.show_own_team, lang, settings.brightness)
         }
         _ => IDLE_FRAME.to_string(),
     }
@@ -263,13 +263,14 @@ pub fn send_once(
     info: &MatchInfo,
     show_own_team: bool,
     lang: Lang,
+    brightness: Brightness,
 ) -> anyhow::Result<Ack> {
     let port_name = match port_name {
         Some(name) => name.to_string(),
         None => detect_port().ok_or_else(|| anyhow::anyhow!("none found"))?,
     };
     let mut port = open(&port_name)?;
-    Ok(send_frame(port.as_mut(), &encode(info, show_own_team, lang))?)
+    Ok(send_frame(port.as_mut(), &encode(info, show_own_team, lang, brightness))?)
 }
 
 fn publish_usb(ctx: &LinkContext, link: Option<UsbLink>) {
@@ -520,8 +521,9 @@ mod tests {
         let mut info = two_v_two();
         info.local_profile_id = Some(100);
         assert_eq!(
-            encode(&info, false, Lang::En),
+            encode(&info, false, Lang::En, Brightness::Normal),
             "M\t2v2\tEl Alamein\n\
+             B\t2\n\
              P\tA\t1284\t164\t135\t3\tde\tVon_Dolofon\n\
              P\tB\t-\t-\t-\t-\t-\tSaulek\n\
              E\n"
@@ -537,7 +539,8 @@ mod tests {
         let mut info = two_v_two();
         info.local_profile_id = Some(100);
         assert_eq!(shown_players(&info, true).len(), 4);
-        assert_eq!(encode(&info, true, Lang::En).lines().filter(|l| l.starts_with('P')).count(), 4);
+        let frame = encode(&info, true, Lang::En, Brightness::Normal);
+        assert_eq!(frame.lines().filter(|l| l.starts_with('P')).count(), 4);
     }
 
     #[test]
@@ -552,15 +555,15 @@ mod tests {
     #[test]
     fn names_are_made_safe_for_the_display() {
         let players = vec![player(0, 0, "Tab\there Paweł and a very long tail", "frontend", None)];
-        let frame = encode(&info(players), false, Lang::En);
-        assert_eq!(frame.lines().nth(1).unwrap(), "P\t?\t-\t-\t-\t-\t-\tTabhere Pawe? and a very");
+        let frame = encode(&info(players), false, Lang::En, Brightness::Normal);
+        assert_eq!(frame.lines().nth(2).unwrap(), "P\t?\t-\t-\t-\t-\t-\tTabhere Pawe? and a very");
     }
 
     #[test]
     fn sends_the_maps_title_in_the_apps_language() {
         let rapido = MatchInfo { map: "rapido_river_8p".to_string(), ..two_v_two() };
-        assert!(encode(&rapido, false, Lang::En).starts_with("M\t2v2\tRapido River Crossing\n"));
-        let frame = encode(&rapido, false, Lang::De);
+        assert!(encode(&rapido, false, Lang::En, Brightness::Normal).starts_with("M\t2v2\tRapido River Crossing\n"));
+        let frame = encode(&rapido, false, Lang::De, Brightness::Normal);
         assert!(frame.starts_with("M\t2v2\tÜberquerung des Rapido-Flusses\n"));
 
         // The longest title there is, with a two-byte character, fits the firmware's field.
@@ -572,7 +575,7 @@ mod tests {
         assert_eq!(parsed.map.as_str(), "Überquerung des Rapido-Flusses");
 
         let unknown = MatchInfo { map: "some_new_map_6p".to_string(), ..two_v_two() };
-        assert!(encode(&unknown, false, Lang::De).starts_with("M\t2v2\tSome New Map\n"));
+        assert!(encode(&unknown, false, Lang::De, Brightness::Normal).starts_with("M\t2v2\tSome New Map\n"));
     }
 
     #[test]
@@ -590,7 +593,7 @@ mod tests {
 
     #[test]
     fn firmware_parser_understands_encoded_frames() {
-        let frame = encode(&two_v_two(), false, Lang::En);
+        let frame = encode(&two_v_two(), false, Lang::En, Brightness::Normal);
 
         let mut parser = device::Parser::new();
         let mut parsed = None;
@@ -621,8 +624,30 @@ mod tests {
     }
 
     #[test]
+    fn tells_the_display_how_bright_to_be() {
+        let parse = |frame: &str| {
+            let mut parser = device::Parser::new();
+            match frame.lines().find_map(|line| parser.feed_line(line)) {
+                Some(device::Frame::Match(parsed)) => parsed.brightness,
+                other => panic!("frame ends with E, got {other:?}"),
+            }
+        };
+        for (brightness, level) in [(Brightness::Low, 1), (Brightness::Normal, 2), (Brightness::High, 3)] {
+            let frame = encode(&two_v_two(), false, Lang::En, brightness);
+            assert_eq!(frame.lines().nth(1), Some(format!("B\t{level}").as_str()));
+            assert_eq!(parse(&frame), level);
+        }
+
+        // A frame from an older app has no such line, and nonsense is not taken at its word.
+        assert_eq!(parse("M\t2v2\tEl Alamein\nE"), 2);
+        assert_eq!(parse("M\t2v2\tEl Alamein\nB\tx\nE"), 2);
+        assert_eq!(parse("M\t2v2\tEl Alamein\nB\t9\nE"), 2);
+    }
+
+    #[test]
     fn sends_at_most_eight_players() {
         let players = (0..10).map(|i| player(i, i % 2, "x", "germans", None)).collect();
-        assert_eq!(encode(&info(players), false, Lang::En).lines().filter(|l| l.starts_with('P')).count(), 8);
+        let frame = encode(&info(players), false, Lang::En, Brightness::Normal);
+        assert_eq!(frame.lines().filter(|l| l.starts_with('P')).count(), 8);
     }
 }

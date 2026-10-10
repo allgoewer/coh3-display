@@ -7,7 +7,7 @@ use std::sync::{Arc, mpsc};
 
 use anyhow::Result;
 use tokio::sync::watch;
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -21,7 +21,7 @@ use coh3_display::firmware::{self, BoardWifi, FirmwareState};
 use coh3_display::i18n::Lang;
 use coh3_display::icon;
 use coh3_display::model::MatchInfo;
-use coh3_display::settings::Settings;
+use coh3_display::settings::{Brightness, Settings};
 use coh3_display::tray_model::{self, Command as BoardCommand, Entry, MenuModel, Toggle};
 
 use crate::win;
@@ -50,6 +50,7 @@ enum UserEvent {
 
 enum Action {
     Toggle(Toggle),
+    Brightness(Brightness),
     Board(BoardCommand),
     OpenProfile(u64),
     OpenLog,
@@ -101,6 +102,15 @@ impl App {
                 Entry::Check { label, checked, toggle } => {
                     self.actions.insert(id.clone(), Action::Toggle(*toggle));
                     menu.append(&CheckMenuItem::with_id(id, label, true, *checked, None))
+                }
+                Entry::Brightness { label, options, current } => {
+                    let submenu = Submenu::new(label, true);
+                    for (option, (label, brightness)) in options.iter().enumerate() {
+                        let id = MenuId::new(format!("{index}.{option}"));
+                        self.actions.insert(id.clone(), Action::Brightness(*brightness));
+                        let _ = submenu.append(&CheckMenuItem::with_id(id, label, true, brightness == current, None));
+                    }
+                    menu.append(&submenu)
                 }
                 Entry::Command { label, command } => {
                     self.actions.insert(id.clone(), Action::Board(*command));
@@ -239,6 +249,16 @@ impl App {
             Toggle::KeepLastMatch => self.ctx.saved.keep_last_match = effective.keep_last_match,
             Toggle::Autostart => {}
         }
+        self.save_settings();
+    }
+
+    fn set_brightness(&mut self, brightness: Brightness) {
+        self.ctx.settings.send_modify(|settings| settings.brightness = brightness);
+        self.ctx.saved.brightness = brightness;
+        self.save_settings();
+    }
+
+    fn save_settings(&self) {
         if let Some(path) = &self.ctx.settings_path {
             if let Err(err) = self.ctx.saved.save(path) {
                 log(format!("Could not save {}: {err}", path.display()));
@@ -258,6 +278,10 @@ impl ApplicationHandler<UserEvent> for App {
                 Some(Action::Toggle(toggle)) => {
                     let toggle = *toggle;
                     self.toggle(toggle);
+                }
+                Some(Action::Brightness(brightness)) => {
+                    let brightness = *brightness;
+                    self.set_brightness(brightness);
                 }
                 Some(Action::Board(BoardCommand::InstallFirmware)) => self.install_firmware(),
                 Some(Action::Board(BoardCommand::SetupWifi)) => self.setup_wifi(),

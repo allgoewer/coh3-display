@@ -4,6 +4,7 @@
 use crate::display_link::{Ack, OutcomeKind};
 use crate::firmware::CredentialError;
 use crate::model::Phase;
+use crate::settings::Brightness;
 use crate::tray_model::Toggle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -187,6 +188,23 @@ impl Lang {
             (Lang::De, Toggle::KeepLastMatch) => "Letztes Match auf dem Display behalten",
             (Lang::En, Toggle::Autostart) => "Start with Windows",
             (Lang::De, Toggle::Autostart) => "Mit Windows starten",
+        }
+    }
+
+    pub fn brightness_menu(self) -> &'static str {
+        match self {
+            Lang::En => "Display brightness",
+            Lang::De => "Display-Helligkeit",
+        }
+    }
+
+    pub fn brightness(self, brightness: Brightness) -> &'static str {
+        match (self, brightness) {
+            (Lang::En, Brightness::Low) => "Low",
+            (Lang::De, Brightness::Low) => "Niedrig",
+            (_, Brightness::Normal) => "Normal",
+            (Lang::En, Brightness::High) => "High",
+            (Lang::De, Brightness::High) => "Hoch",
         }
     }
 

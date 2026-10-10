@@ -5,6 +5,7 @@ port. Text lines, fields separated by a tab, each line ended by `\n`.
 
 ```
 M <mode> <map>
+B <level>
 P <faction> <elo> <wins> <losses> <streak> <country> <name>
 E
 ```
@@ -12,6 +13,7 @@ E
 | line | meaning |
 |---|---|
 | `M` | starts a frame and discards any unfinished one. `mode` is `1v1`..`4v4`; the display no longer shows it (since firmware 0.3.2), it stays in the frame so every firmware reads every app's frames. `map` is the map's title as the display should show it, at most 32 chars, made safe like `name` below. |
+| `B` | optional, after `M`: how bright to show this match, `1` low, `2` normal (also when the line is missing), `3` high. Idle is always shown at the lowest brightness the panel has. Since firmware 1.2.0; older firmware ignores the line. |
 | `P` | one player, at most 8 per frame. The display gives each one its own page, in this order. |
 | `E` | ends the frame. The display redraws and answers `OK\n`, or `ERR display\n` if the board cannot reach its OLED over I2C. |
 | `I` | idle: there is no match worth showing. A frame of its own, answered like `E`. The display stops showing the match and falls back to its idle screen. |

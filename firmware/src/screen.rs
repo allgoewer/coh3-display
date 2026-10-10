@@ -17,7 +17,7 @@ use ssd1306::prelude::*;
 use ssd1306::{I2CDisplayInterface, Ssd1306Async};
 
 use crate::net::{WifiState, wifi_state};
-use crate::protocol::{Frame, Match, Player};
+use crate::protocol::{Frame, Match, NORMAL_BRIGHTNESS, Player};
 use crate::{DISPLAY_READY, FRAME};
 
 const WIDTH: i32 = 128;
@@ -36,6 +36,8 @@ const MIN_PAGE_TICKS: u32 = 125;
 const STATUS_TICKS: u32 = 750;
 /// The host repeats its frame every 5 s. After this long without one (30 s) it is gone.
 const HOST_TIMEOUT_TICKS: u32 = 750;
+/// Stands for the panel's lowest brightness, below the levels a match can ask for (1 to 3).
+const IDLE_BRIGHTNESS: u8 = 0;
 /// The idle tank drives one pixel every this many ticks, about 8 pixels a second.
 const IDLE_STEP_TICKS: u32 = 3;
 
@@ -355,15 +357,25 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
     let mut dirty = true;
     let mut mode = Mode::Status { ticks_left: STATUS_TICKS };
     let mut shown_wifi = wifi_state();
-    let mut dimmed = false;
+    // What the panel is set to: a match's level, or `IDLE_BRIGHTNESS`.
+    let mut level = NORMAL_BRIGHTNESS;
     let mut ticker = Ticker::every(TICK);
     loop {
         if dirty {
-            // Idle runs at the panel's lowest brightness; everything else at the normal one.
-            let idling = matches!(mode, Mode::Idle { .. });
-            if idling != dimmed {
-                let brightness = if idling { Brightness::DIMMEST } else { Brightness::NORMAL };
-                dimmed = display.set_brightness(brightness).await.map_or(dimmed, |()| idling);
+            // Idle runs at the panel's lowest brightness, a match at the one the app asks for.
+            let wanted = match (&mode, &current) {
+                (Mode::Idle { .. }, _) => IDLE_BRIGHTNESS,
+                (Mode::Match { .. }, Some(current)) => current.brightness,
+                _ => NORMAL_BRIGHTNESS,
+            };
+            if wanted != level {
+                let brightness = match wanted {
+                    IDLE_BRIGHTNESS => Brightness::DIMMEST,
+                    1 => Brightness::DIM,
+                    3 => Brightness::BRIGHTEST,
+                    _ => Brightness::NORMAL,
+                };
+                level = display.set_brightness(brightness).await.map_or(level, |()| wanted);
             }
             match (&mode, &current) {
                 (Mode::Match { .. }, Some(current)) => {
@@ -378,13 +390,19 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
         match select(FRAME.wait(), ticker.next()).await {
             Either::First(Frame::Match(received)) => {
                 // The host repeats the current match; only a different one restarts the page.
-                let is_new = current.as_ref() != Some(&received);
-                dirty = is_new || !matches!(mode, Mode::Match { .. });
-                if is_new {
-                    current = Some(received);
+                // A change of brightness alone is shown at once, on the page that is up.
+                let changed = current.as_ref() != Some(&received);
+                let same_match = current.as_ref().is_some_and(|shown| {
+                    shown.mode == received.mode && shown.map == received.map && shown.players == received.players
+                });
+                dirty = changed || !matches!(mode, Mode::Match { .. });
+                if !same_match {
                     page = 0;
                     header_tick = 0;
                     page_tick = 0;
+                }
+                if changed {
+                    current = Some(received);
                 }
                 mode = Mode::Match { silent_ticks: 0 };
             }
