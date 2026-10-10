@@ -2,7 +2,7 @@
 edition      = "2024"
 name         = "firmware"
 rust-version = "1.95"
-version      = "0.3.3"
+version      = "1.0.0"
 
 [[bin]]
 name = "firmware"
