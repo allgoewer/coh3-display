@@ -22,8 +22,9 @@ PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\{#AppName}
 DisableProgramGroupPage=yes
 DisableDirPage=auto
-; The tray app holds this mutex (src/win.rs); setup and uninstall ask to quit it first.
-AppMutex=Local\coh3-display-tracker
+; Setup and uninstall stop a running tray app themselves (StopApp below) instead of asking
+; for it to be quit, so neither AppMutex nor the Restart Manager is used.
+CloseApplications=no
 SetupIconFile=coh3-display.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -67,6 +68,30 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// Ends a running tray app, which would otherwise keep its exe locked. It has no window to
+// close politely; its settings are written whenever they change, so nothing is lost.
+procedure StopApp;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#AppExe}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // taskkill reports 0 when it ended something; give Windows a moment to release the file.
+  if ResultCode = 0 then
+    Sleep(500);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopApp;
+  Result := '';
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  StopApp;
+  Result := True;
+end;
+
 // Settings and the log are kept by default, so a reinstall picks up where it left off.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
