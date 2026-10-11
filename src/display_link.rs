@@ -192,14 +192,14 @@ pub fn frame_for(info: Option<&MatchInfo>, own: Option<&OwnStats>, settings: &Se
             encode(info, settings.show_own_team, lang, settings.brightness)
         }
         // In the menu: the player's own ratings stand in for the idle screen.
-        (_, Some(own)) if settings.own_stats => encode_own(own),
+        (_, Some(own)) if settings.own_stats => encode_own(own, settings.brightness),
         _ => IDLE_FRAME.to_string(),
     }
 }
 
 /// Encodes the player's own ratings as one protocol frame.
-pub fn encode_own(own: &OwnStats) -> String {
-    let mut frame = format!("S\t{}\n", sanitize(&own.name));
+pub fn encode_own(own: &OwnStats, brightness: Brightness) -> String {
+    let mut frame = format!("S\t{}\nB\t{}\n", sanitize(&own.name), brightness.level());
     for (mode, ratings) in ["1v1", "2v2"].iter().zip(&own.ratings) {
         let _ = write!(frame, "R\t{mode}");
         for rating in ratings {
@@ -685,8 +685,11 @@ mod tests {
     #[test]
     fn shows_own_ratings_when_there_is_no_match_to_show() {
         let settings = Settings::default();
-        let stats = "S\tNullgerät\nR\t1v1\t1207\t-\t-\t-\nR\t2v2\t1408\t-\t-\t1369\nE\n";
+        let stats = "S\tNullgerät\nB\t2\nR\t1v1\t1207\t-\t-\t-\nR\t2v2\t1408\t-\t-\t1369\nE\n";
         assert_eq!(frame_for(None, Some(&own()), &settings, Lang::En), stats);
+        // The ratings are as bright as a match is set to be.
+        let bright = Settings { brightness: Brightness::High, ..settings };
+        assert!(frame_for(None, Some(&own()), &bright, Lang::En).starts_with("S\tNullgerät\nB\t3\n"));
 
         // A match that is on, or only just over, comes first; a finished one does not.
         let mut info = two_v_two();
@@ -702,13 +705,18 @@ mod tests {
 
     #[test]
     fn firmware_parser_understands_own_ratings() {
-        let frame = encode_own(&own());
+        let frame = encode_own(&own(), Brightness::High);
         let mut parser = device::Parser::new();
         let parsed = frame.lines().find_map(|line| parser.feed_line(line));
         let Some(device::Frame::Stats(parsed)) = parsed else {
             panic!("frame ends with E, got {parsed:?}");
         };
         assert_eq!(parsed.name.as_str(), "Nullgerät");
+        assert_eq!(parsed.brightness, 3);
+        // An app from before the ratings carried a brightness gets them dimmed, as it expects.
+        let mut parser = device::Parser::new();
+        let old = ["S\tNullgerät", "R\t1v1\t1207\t-\t-\t-", "E"].into_iter().find_map(|line| parser.feed_line(line));
+        assert!(matches!(old, Some(device::Frame::Stats(old)) if old.brightness == 1));
         assert_eq!(parsed.ratings, [[Some(1207), None, None, None], [Some(1408), None, None, Some(1369)]]);
 
         // In a datagram the frame follows an idle line, which is all that older firmware

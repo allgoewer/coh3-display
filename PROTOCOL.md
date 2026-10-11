@@ -36,6 +36,7 @@ While the game is open but no match is being shown, the host sends this frame in
 
 ```
 S <name>
+B <level>
 R <mode> <usf> <ukf> <dak> <wehr>
 E
 ```
@@ -46,9 +47,12 @@ E
 | `R` | one per mode, `1v1` and `2v2`: the ELO for each faction in this order, or `-` where the player has no games. |
 | `E` | ends the frame, answered as for a match. |
 
-The display shows the name in its header and one page per mode, at low brightness whatever
-the `B` level of matches is, because the menu can stay open for hours. Like a match it goes
-idle after 30 seconds without a frame.
+The display shows the name in its header and one page per mode. Like a match it goes idle
+after 30 seconds without a frame.
+
+A `B` line after `S` sets the brightness, with the same levels as for a match (since
+firmware 1.3.2). Without one the ratings are shown at level 1, low, which is what firmware
+1.3.0 and 1.3.1 always did.
 
 Firmware before 1.3.0 does not know these lines and would not answer the frame. Over serial
 the host only sends frames to a board whose firmware is current. In a UDP datagram, where

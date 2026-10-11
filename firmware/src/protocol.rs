@@ -44,6 +44,8 @@ pub struct Match {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OwnStats {
     pub name: String<48>,
+    /// How bright to show them, as for a match. A frame that does not say gets 1 (low).
+    pub brightness: u8,
     /// 1v1 and 2v2, each for the factions A, B, D, G; `None` where there are no games.
     pub ratings: [[Option<u16>; 4]; 2],
 }
@@ -101,7 +103,7 @@ impl Parser {
             "S" => {
                 self.pending = None;
                 self.pending_stats =
-                    Some(OwnStats { name: fit(fields.next().unwrap_or("")), ratings: [[None; 4]; 2] });
+                    Some(OwnStats { name: fit(fields.next().unwrap_or("")), brightness: 1, ratings: [[None; 4]; 2] });
                 None
             }
             "R" => {
@@ -129,8 +131,13 @@ impl Parser {
             }
             "B" => {
                 let level = fields.next().and_then(|level| level.parse().ok()).filter(|level| (1..=3).contains(level));
-                if let (Some(pending), Some(level)) = (&mut self.pending, level) {
-                    pending.brightness = level;
+                if let Some(level) = level {
+                    if let Some(pending) = &mut self.pending {
+                        pending.brightness = level;
+                    }
+                    if let Some(pending) = &mut self.pending_stats {
+                        pending.brightness = level;
+                    }
                 }
                 None
             }

@@ -420,8 +420,7 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
             let wanted = match (&mode, &current) {
                 (Mode::Idle { .. }, _) => IDLE_BRIGHTNESS,
                 (Mode::Match { .. }, Some(current)) => current.brightness,
-                // The menu can stay up for hours, so the ratings are shown dimmed.
-                (Mode::Stats { .. }, _) => 1,
+                (Mode::Stats { .. }, _) => own.as_ref().map_or(1, |own| own.brightness),
                 _ => NORMAL_BRIGHTNESS,
             };
             if wanted != level {
