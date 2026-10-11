@@ -36,6 +36,8 @@ pub enum Entry {
     Brightness { label: &'static str, options: Vec<(&'static str, Brightness)>, current: Brightness },
     /// Something to do with the board on USB; asks before it acts.
     Command { label: String, command: Command },
+    /// A newer version of the app is out; opens the page it can be downloaded from.
+    Update { label: String },
     OpenLog,
     Quit,
 }
@@ -111,9 +113,14 @@ pub fn build(
     settings: &Settings,
     autostart: bool,
     embedded: Option<&str>,
+    update: Option<&str>,
     lang: Lang,
 ) -> MenuModel {
-    let mut entries = vec![Entry::Label(format!("CoH3 Display {}", env!("CARGO_PKG_VERSION"))), Entry::Separator];
+    let mut entries = vec![Entry::Label(format!("CoH3 Display {}", env!("CARGO_PKG_VERSION")))];
+    if let Some(version) = update {
+        entries.push(Entry::Update { label: lang.update_available(version) });
+    }
+    entries.push(Entry::Separator);
 
     let mut tooltip = match info {
         Some(info) => {
@@ -224,7 +231,7 @@ mod tests {
     fn marks_a_match_that_is_no_longer_on() {
         let title = |phase| {
             let info = MatchInfo { phase, ..santuario() };
-            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None, Lang::En))[1].clone()
+            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None, None, Lang::En))[1].clone()
         };
         assert_eq!(title(Phase::Live), "2v2 · Santuario");
         assert_eq!(title(Phase::Lingering), "2v2 · Santuario · ended");
@@ -249,7 +256,7 @@ mod tests {
             wifi: vec![WifiLink { addr: "10.204.28.172".parse().unwrap(), ack: Some(Ack::Silent) }],
             outcome: None,
         };
-        let model = build(Some(&santuario()), &links, &Settings::default(), false, Some("0.2.0"), Lang::En);
+        let model = build(Some(&santuario()), &links, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
 
         assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Santuario");
         assert!(model.connected);
@@ -274,16 +281,35 @@ mod tests {
     }
 
     #[test]
+    fn offers_a_newer_version_under_the_title() {
+        let with = |update, lang| build(None, &LinkStatus::default(), &Settings::default(), false, None, update, lang);
+
+        let model = with(Some("9.9.0"), Lang::En);
+        assert!(matches!(&model.entries[0], Entry::Label(title) if title.starts_with("CoH3 Display ")));
+        assert_eq!(model.entries[1], Entry::Update { label: "Version 9.9.0 available: download…".to_string() });
+        assert_eq!(model.entries[2], Entry::Separator);
+        assert_eq!(
+            with(Some("9.9.0"), Lang::De).entries[1],
+            Entry::Update { label: "Version 9.9.0 verfügbar: herunterladen…".to_string() }
+        );
+
+        // Nothing newer, or the check has not answered: the menu is as it always was.
+        let model = with(None, Lang::En);
+        assert_eq!(model.entries[1], Entry::Separator);
+        assert!(!model.entries.iter().any(|entry| matches!(entry, Entry::Update { .. })));
+    }
+
+    #[test]
     fn lists_everyone_when_the_own_team_is_shown() {
         let settings = Settings { show_own_team: true, ..Settings::default() };
-        let model = build(Some(&santuario()), &LinkStatus::default(), &settings, false, None, Lang::En);
+        let model = build(Some(&santuario()), &LinkStatus::default(), &settings, false, None, None, Lang::En);
         let players = model.entries.iter().filter(|entry| matches!(entry, Entry::Player { .. })).count();
         assert_eq!(players, 4);
     }
 
     #[test]
     fn describes_the_empty_states() {
-        let model = build(None, &LinkStatus::default(), &Settings::default(), true, None, Lang::En);
+        let model = build(None, &LinkStatus::default(), &Settings::default(), true, None, None, Lang::En);
         assert!(!model.connected);
         assert_eq!(labels(&model)[1..], ["No match yet", "No display found"]);
         assert!(model.entries.contains(&Entry::Check {
@@ -303,7 +329,7 @@ mod tests {
         }));
 
         let off = Settings { usb: false, wifi: false, ..Settings::default() };
-        let model = build(None, &LinkStatus::default(), &off, false, None, Lang::En);
+        let model = build(None, &LinkStatus::default(), &off, false, None, None, Lang::En);
         assert_eq!(labels(&model)[2], "Displays switched off");
     }
 
@@ -315,7 +341,7 @@ mod tests {
             outcome: None,
         };
         let info = MatchInfo { map: "rural_town_4p".to_string(), phase: Phase::Lingering, ..santuario() };
-        let model = build(Some(&info), &links, &Settings::default(), false, Some("0.2.0"), Lang::De);
+        let model = build(Some(&info), &links, &Settings::default(), false, Some("0.2.0"), None, Lang::De);
 
         assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Pachino-Ackerland · beendet");
         assert_eq!(
@@ -341,7 +367,7 @@ mod tests {
         }));
 
         let dim = Settings { brightness: Brightness::Low, ..Settings::default() };
-        let model = build(None, &LinkStatus::default(), &dim, false, None, Lang::De);
+        let model = build(None, &LinkStatus::default(), &dim, false, None, None, Lang::De);
         assert!(model.entries.contains(&Entry::Brightness {
             label: "Display-Helligkeit",
             options: vec![("Niedrig", Brightness::Low), ("Normal", Brightness::Normal), ("Hoch", Brightness::High)],
@@ -352,7 +378,7 @@ mod tests {
     }
 
     fn commands(links: &LinkStatus, embedded: Option<&str>) -> Vec<(String, Command)> {
-        build(None, links, &Settings::default(), false, embedded, Lang::En)
+        build(None, links, &Settings::default(), false, embedded, None, Lang::En)
             .entries
             .into_iter()
             .filter_map(|entry| match entry {
@@ -367,7 +393,7 @@ mod tests {
         let with = |link: UsbLink| LinkStatus { usb: Some(link), ..LinkStatus::default() };
 
         let blank = with(usb(FirmwareState::Missing, None, None));
-        let model = build(None, &blank, &Settings::default(), false, Some("0.2.0"), Lang::En);
+        let model = build(None, &blank, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
         assert_eq!(labels(&model)[2], "USB COM6: no display firmware");
         assert_eq!(commands(&blank, Some("0.2.0")), [("Install display firmware…".to_string(), Command::InstallFirmware)]);
         // An app built without firmware has nothing to offer.
@@ -380,7 +406,7 @@ mod tests {
         );
 
         let fresh = with(usb(current(), Some(BoardWifi::Unset), None));
-        let model = build(None, &fresh, &Settings::default(), false, Some("0.2.0"), Lang::En);
+        let model = build(None, &fresh, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
         assert!(labels(&model).contains(&"WiFi on this display is not set up".to_string()));
         assert_eq!(commands(&fresh, Some("0.2.0")), [("Set up WiFi on this display…".to_string(), Command::SetupWifi)]);
     }
@@ -390,7 +416,7 @@ mod tests {
         let mut link = usb(FirmwareState::Missing, None, None);
         link.installing = Some(42);
         let links = LinkStatus { usb: Some(link), ..LinkStatus::default() };
-        let model = build(None, &links, &Settings::default(), false, Some("0.2.0"), Lang::En);
+        let model = build(None, &links, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
         assert_eq!(labels(&model)[2], "USB COM6: installing firmware… 42 %");
         assert_eq!(model.tooltip, "CoH3 Display – installing firmware 42 %");
         assert_eq!(commands(&links, Some("0.2.0")), []);

@@ -292,7 +292,20 @@ fn main() -> Result<()> {
 
     #[cfg(windows)]
     if !args.no_tray {
-        let ctx = tray::TrayContext { matches, links, settings: settings_tx, saved, settings_path, commands, lang };
+        // Asked once per start; the menu only ever offers a link, nothing installs itself.
+        let (update_tx, update) = watch::channel(None);
+        runtime.spawn(async move {
+            match coh3_display::update::newer_release().await {
+                Ok(Some(version)) => {
+                    log(format!("Version {version} of the app is available"));
+                    let _ = update_tx.send(Some(version));
+                }
+                Ok(None) => {}
+                Err(err) => log(format!("Could not check for a newer version: {err:#}")),
+            }
+        });
+        let ctx =
+            tray::TrayContext { matches, links, settings: settings_tx, saved, settings_path, commands, lang, update };
         return tray::run(ctx, runtime.handle());
     }
 

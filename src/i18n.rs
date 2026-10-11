@@ -210,6 +210,13 @@ impl Lang {
         }
     }
 
+    pub fn update_available(self, version: &str) -> String {
+        match self {
+            Lang::En => format!("Version {version} available: download…"),
+            Lang::De => format!("Version {version} verfügbar: herunterladen…"),
+        }
+    }
+
     pub fn open_log(self) -> &'static str {
         match self {
             Lang::En => "Open log file",

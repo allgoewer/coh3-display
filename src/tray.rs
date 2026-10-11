@@ -23,6 +23,7 @@ use coh3_display::icon;
 use coh3_display::model::MatchInfo;
 use coh3_display::settings::{Brightness, Settings};
 use coh3_display::tray_model::{self, Command as BoardCommand, Entry, MenuModel, Toggle};
+use coh3_display::update;
 
 use crate::win;
 
@@ -40,6 +41,8 @@ pub struct TrayContext {
     pub commands: mpsc::Sender<LinkCommand>,
     /// The language of the menu and its dialogs.
     pub lang: Lang,
+    /// A newer version of the app, once the check at startup has found one.
+    pub update: watch::Receiver<Option<String>>,
 }
 
 enum UserEvent {
@@ -53,6 +56,7 @@ enum Action {
     Brightness(Brightness),
     Board(BoardCommand),
     OpenProfile(u64),
+    OpenDownload,
     OpenLog,
     Quit,
 }
@@ -116,6 +120,10 @@ impl App {
                     self.actions.insert(id.clone(), Action::Board(*command));
                     menu.append(&MenuItem::with_id(id, escape(label), true, None))
                 }
+                Entry::Update { label } => {
+                    self.actions.insert(id.clone(), Action::OpenDownload);
+                    menu.append(&MenuItem::with_id(id, escape(label), true, None))
+                }
                 Entry::OpenLog => {
                     self.actions.insert(id.clone(), Action::OpenLog);
                     menu.append(&MenuItem::with_id(id, self.ctx.lang.open_log(), true, None))
@@ -137,6 +145,7 @@ impl App {
             &self.ctx.settings.borrow(),
             autostart::is_enabled(),
             firmware::embedded().map(|firmware| firmware.version),
+            self.ctx.update.borrow().as_deref(),
             self.ctx.lang,
         );
         if self.shown.as_ref() == Some(&model) {
@@ -288,6 +297,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Some(Action::Board(BoardCommand::InstallFirmware)) => self.install_firmware(),
                 Some(Action::Board(BoardCommand::SetupWifi)) => self.setup_wifi(),
                 Some(Action::OpenProfile(profile_id)) => open(&format!("https://coh3stats.com/players/{profile_id}")),
+                Some(Action::OpenDownload) => open(update::DOWNLOAD_URL),
                 Some(Action::OpenLog) => match applog::path() {
                     Some(path) => open(&path.display().to_string()),
                     None => log("There is no log file"),
@@ -330,6 +340,15 @@ pub fn run(ctx: TrayContext, runtime: &tokio::runtime::Handle) -> Result<()> {
             if !alive || proxy.send_event(UserEvent::Refresh).is_err() {
                 break;
             }
+        }
+    });
+
+    // The update check answers once, if at all; after that its channel closes for good.
+    let proxy = event_loop.create_proxy();
+    let mut update = ctx.update.clone();
+    runtime.spawn(async move {
+        if update.changed().await.is_ok() {
+            let _ = proxy.send_event(UserEvent::Refresh);
         }
     });
 

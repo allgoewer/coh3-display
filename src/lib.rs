@@ -13,6 +13,7 @@ pub mod relic;
 pub mod render;
 pub mod settings;
 pub mod tray_model;
+pub mod update;
 pub mod watcher;
 
 use std::time::{Duration, Instant};
