@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, encode, frame_for};
+use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, datagram, encode, frame_for};
 use crate::applog::log;
 use crate::i18n::Lang;
 use crate::model::MatchInfo;
@@ -144,6 +144,7 @@ fn serve(socket: &UdpSocket, fixed: Option<IpAddr>, ctx: &mut LinkContext) -> io
             return Ok(Stop::Closed);
         };
         let settings_changed = ctx.settings.has_changed().unwrap_or(false);
+        let own_changed = ctx.own.has_changed().unwrap_or(false);
         let settings = *ctx.settings.borrow_and_update();
         if !settings.wifi {
             return Ok(Stop::Disabled);
@@ -161,9 +162,11 @@ fn serve(socket: &UdpSocket, fixed: Option<IpAddr>, ctx: &mut LinkContext) -> io
             keep
         });
 
-        if match_changed || settings_changed || found_new || last_sent.is_none_or(|at| at.elapsed() >= RESEND) {
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings, ctx.lang);
-            send(socket, &mut devices, &frame);
+        let changed = match_changed || own_changed || settings_changed || found_new;
+        if changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND) {
+            let own = ctx.own.borrow_and_update().clone();
+            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), own.as_ref(), &settings, ctx.lang);
+            send(socket, &mut devices, &datagram(&frame));
             last_sent = Some(Instant::now());
         }
         publish(ctx, &devices);

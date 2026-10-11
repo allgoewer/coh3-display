@@ -44,6 +44,9 @@ pub struct Settings {
     /// Keep the last match on the display after it is over. For trying things out without
     /// a game running; costs OLED lifetime.
     pub keep_last_match: bool,
+    /// While the game is open but no match is on, show the player's own 1v1 and 2v2 ratings
+    /// instead of the idle screen.
+    pub own_stats: bool,
     /// How bright the display shows a match.
     pub brightness: Brightness,
 }
@@ -56,6 +59,7 @@ impl Default for Settings {
             show_own_team: false,
             auto_update_firmware: true,
             keep_last_match: false,
+            own_stats: true,
             brightness: Brightness::Normal,
         }
     }
@@ -97,6 +101,7 @@ mod tests {
             show_own_team: true,
             auto_update_firmware: false,
             keep_last_match: true,
+            own_stats: false,
             brightness: Brightness::Low,
         };
         settings.save(&path).unwrap();

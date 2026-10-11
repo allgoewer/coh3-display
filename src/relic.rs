@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::model::{Faction, LoggedMatch, MatchInfo, Phase, PlayerInfo, PlayerStats};
+use crate::model::{Faction, LoggedMatch, MatchInfo, OwnStats, Phase, PlayerInfo, PlayerStats};
 
 const BASE_URL: &str = "https://coh3-api.reliclink.com";
 const ATTEMPTS: u32 = 3;
@@ -45,6 +45,8 @@ struct StatGroup {
 struct Member {
     profile_id: u64,
     personal_statgroup_id: u64,
+    #[serde(default)]
+    alias: String,
     #[serde(default)]
     country: Option<String>,
 }
@@ -111,6 +113,11 @@ impl RelicClient {
         Ok(response)
     }
 
+    /// Looks up the 1v1 and 2v2 ratings of one player.
+    pub async fn own_stats(&self, profile_id: u64) -> Result<OwnStats> {
+        Ok(own_stats(&self.personal_stats(&[profile_id]).await?, profile_id))
+    }
+
     /// Looks up every human player of `logged` and combines the result with the log data.
     pub async fn enrich(&self, logged: &LoggedMatch) -> MatchInfo {
         let ids: Vec<u64> = logged.players.iter().filter_map(|p| p.profile_id).collect();
@@ -118,6 +125,27 @@ impl RelicClient {
             Ok(response) => build_match_info(logged, Some(&response), None),
             Err(err) => build_match_info(logged, None, Some(format!("{err:#}"))),
         }
+    }
+}
+
+/// Picks a player's 1v1 and 2v2 ratings for every faction out of a response.
+pub fn own_stats(response: &PersonalStatResponse, profile_id: u64) -> OwnStats {
+    let member = response
+        .stat_groups
+        .iter()
+        .flat_map(|group| &group.members)
+        .find(|member| member.profile_id == profile_id);
+    let rating = |team_size: usize, faction: Faction| {
+        let (member, leaderboard) = (member?, leaderboard_id(team_size, faction)?);
+        response
+            .leaderboard_stats
+            .iter()
+            .find(|row| row.statgroup_id == member.personal_statgroup_id && row.leaderboard_id == leaderboard)
+            .map(|row| row.rating)
+    };
+    OwnStats {
+        name: member.map(|member| member.alias.clone()).unwrap_or_default(),
+        ratings: [1, 2].map(|team_size| Faction::ALL.map(|faction| rating(team_size, faction))),
     }
 }
 
@@ -237,6 +265,19 @@ mod tests {
         let stats = me.stats.as_ref().unwrap();
         assert_eq!((stats.rating, stats.wins, stats.losses, stats.streak), (1369, 44, 28, -1));
         assert!((stats.winrate().unwrap() - 44.0 / 72.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn collects_a_players_own_ratings() {
+        let response: PersonalStatResponse = serde_json::from_str(RESPONSE).unwrap();
+        let own = own_stats(&response, 63411);
+        assert_eq!(own.name, "Nullgerät");
+        // 1v1: only USF. 2v2: USF and Wehrmacht.
+        assert_eq!(own.ratings[0], [Some(1207), None, None, None]);
+        assert_eq!(own.ratings[1], [Some(1408), None, None, Some(1369)]);
+
+        // Someone the response does not know has no name and no ratings.
+        assert_eq!(own_stats(&response, 1), OwnStats::default());
     }
 
     #[test]

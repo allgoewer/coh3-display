@@ -186,6 +186,8 @@ impl Lang {
             (Lang::De, Toggle::AutoUpdateFirmware) => "Display-Firmware automatisch aktualisieren",
             (Lang::En, Toggle::KeepLastMatch) => "Keep last match on display",
             (Lang::De, Toggle::KeepLastMatch) => "Letztes Match auf dem Display behalten",
+            (Lang::En, Toggle::OwnStats) => "Show own ratings in the menu",
+            (Lang::De, Toggle::OwnStats) => "Eigene Wertungen im Menü anzeigen",
             (Lang::En, Toggle::Autostart) => "Start with Windows",
             (Lang::De, Toggle::Autostart) => "Mit Windows starten",
         }

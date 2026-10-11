@@ -17,7 +17,7 @@ use ssd1306::prelude::*;
 use ssd1306::{I2CDisplayInterface, Ssd1306Async};
 
 use crate::net::{WifiState, wifi_state};
-use crate::protocol::{Frame, Match, NORMAL_BRIGHTNESS, Player};
+use crate::protocol::{Frame, Match, NORMAL_BRIGHTNESS, OwnStats, Player};
 use crate::{DISPLAY_READY, FRAME};
 
 const WIDTH: i32 = 128;
@@ -118,6 +118,8 @@ enum Mode {
     Status { ticks_left: u32 },
     /// The match the host sent; `silent_ticks` counts the time since its last frame.
     Match { silent_ticks: u32 },
+    /// The player's own ratings, which the host sends while the game sits in its menu.
+    Stats { silent_ticks: u32 },
     /// A dimmed tank patrolling the blue area on changing rows, so no pixel is lit for long.
     Idle { ticks: u32, tank: Tank },
 }
@@ -193,13 +195,6 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
     pages: usize,
     tick: u32,
 ) -> i32 {
-    let font = &FONT_7X13_BOLD;
-    let markers = if pages > 1 { pages.min(MAX_MARKERS) as i32 } else { 0 };
-    // Two pages sit side by side; more are stacked in two rows to leave the map its room.
-    let rows = if markers > 2 { 2 } else { 1 };
-    let columns = (markers + rows - 1) / rows;
-    let markers_width = if markers > 0 { columns * 7 + 2 } else { 0 };
-
     // The app sends the map's title. Before 0.3.3 of this firmware it sent the scenario's
     // file name (`crossing_in_the_woods`), which is all lower case and still gets tidied up.
     let is_title = current.map.chars().any(char::is_uppercase);
@@ -210,8 +205,27 @@ fn draw_header<D: DrawTarget<Color = BinaryColor>>(
         let _ = map.push(if word_start { c.to_ascii_uppercase() } else { c });
         word_start = c == ' ' && !is_title;
     }
+    draw_title(target, &map, page, pages, tick)
+}
+
+/// The yellow line: a title, scrolling if it has to, and at its right end one square per
+/// page. Returns how far the title overflows.
+fn draw_title<D: DrawTarget<Color = BinaryColor>>(
+    target: &mut D,
+    title: &str,
+    page: usize,
+    pages: usize,
+    tick: u32,
+) -> i32 {
+    let font = &FONT_7X13_BOLD;
+    let markers = if pages > 1 { pages.min(MAX_MARKERS) as i32 } else { 0 };
+    // Two pages sit side by side; more are stacked in two rows to leave the title its room.
+    let rows = if markers > 2 { 2 } else { 1 };
+    let columns = (markers + rows - 1) / rows;
+    let markers_width = if markers > 0 { columns * 7 + 2 } else { 0 };
+
     let area = Rectangle::new(Point::new(1, 1), Size::new((WIDTH - markers_width - 1).max(0) as u32, 13));
-    let overflow = scrolling_text(target, &map, area, font, tick);
+    let overflow = scrolling_text(target, title, area, font, tick);
 
     for index in 0..markers {
         // Row by row, like text: 1 2 above 3 4.
@@ -321,6 +335,33 @@ fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, tank: &Tank) {
     let _ = target.clipped(&blue).draw_iter(pixels);
 }
 
+/// Draws one page of the player's own ratings: their name in the header, then a mode and
+/// the rating for each faction:
+///
+/// ```text
+/// 1v1
+/// USF  1207 UKF  1150
+/// DAK  -    Wehr 1369
+/// ```
+fn draw_stats<D: DrawTarget<Color = BinaryColor>>(target: &mut D, own: &OwnStats, page: usize, tick: u32) -> Drawn {
+    let _ = target.clear(BinaryColor::Off);
+    let page = page % own.ratings.len();
+    let overflow = draw_title(target, &own.name, page, own.ratings.len(), tick);
+
+    text(target, if page == 0 { "1v1" } else { "2v2" }, Point::new(0, HEADER_HEIGHT), &FONT_9X18_BOLD);
+    for (index, (rating, faction)) in own.ratings[page].iter().zip(['A', 'B', 'D', 'G']).enumerate() {
+        let mut cell: String<12> = String::new();
+        let _ = match rating {
+            Some(rating) => write!(cell, "{:<4} {rating}", faction_name(faction)),
+            None => write!(cell, "{:<4} -", faction_name(faction)),
+        };
+        // Two columns of nine characters, two rows.
+        let at = Point::new((index % 2) as i32 * 65, HEADER_HEIGHT + 19 + (index / 2) as i32 * 14);
+        text(target, &cell, at, &FONT_7X13_BOLD);
+    }
+    Drawn { player_overflow: 0, animated: overflow > 0 }
+}
+
 /// Draws one page of a match: the header and one player.
 fn draw_match<D: DrawTarget<Color = BinaryColor>>(
     target: &mut D,
@@ -356,6 +397,7 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
     DISPLAY_READY.store(true, Ordering::Relaxed);
 
     let mut current: Option<Match> = None;
+    let mut own: Option<OwnStats> = None;
     let mut page = 0usize;
     // The header scrolls independently of page flips; a player's lines restart with the page.
     let mut header_tick = 0u32;
@@ -373,6 +415,8 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
             let wanted = match (&mode, &current) {
                 (Mode::Idle { .. }, _) => IDLE_BRIGHTNESS,
                 (Mode::Match { .. }, Some(current)) => current.brightness,
+                // The menu can stay up for hours, so the ratings are shown dimmed.
+                (Mode::Stats { .. }, _) => 1,
                 _ => NORMAL_BRIGHTNESS,
             };
             if wanted != level {
@@ -384,11 +428,12 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
                 };
                 level = display.set_brightness(brightness).await.map_or(level, |()| wanted);
             }
-            match (&mode, &current) {
-                (Mode::Match { .. }, Some(current)) => {
+            match (&mode, &current, &own) {
+                (Mode::Match { .. }, Some(current), _) => {
                     drawn = draw_match(&mut display, current, page, header_tick, page_tick);
                 }
-                (Mode::Idle { tank, .. }, _) => draw_idle(&mut display, tank),
+                (Mode::Stats { .. }, _, Some(own)) => drawn = draw_stats(&mut display, own, page, header_tick),
+                (Mode::Idle { tank, .. }, ..) => draw_idle(&mut display, tank),
                 _ => draw_status(&mut display),
             }
             let _ = display.flush().await;
@@ -413,11 +458,29 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
                 }
                 mode = Mode::Match { silent_ticks: 0 };
             }
-            Either::First(Frame::Idle) => {
+            Either::First(Frame::Stats(received)) => {
                 // The status screen runs out by itself; it is there to be read.
-                dirty = matches!(mode, Mode::Match { .. });
+                if matches!(mode, Mode::Status { .. }) {
+                    dirty = false;
+                    continue;
+                }
+                let entering = !matches!(mode, Mode::Stats { .. });
+                dirty = entering || own.as_ref() != Some(&received);
+                if entering {
+                    current = None;
+                    page = 0;
+                    header_tick = 0;
+                    page_tick = 0;
+                }
+                own = Some(received);
+                mode = Mode::Stats { silent_ticks: 0 };
+            }
+            Either::First(Frame::Idle) => {
+                // Not the status screen either: it, too, runs out by itself.
+                dirty = matches!(mode, Mode::Match { .. } | Mode::Stats { .. });
                 if dirty {
                     current = None;
+                    own = None;
                     mode = idle();
                 }
             }
@@ -457,6 +520,23 @@ pub async fn screen_task(i2c: I2c<'static, Async>) {
                         if dirty {
                             mode = idle();
                         }
+                    }
+                    Mode::Stats { silent_ticks } => {
+                        *silent_ticks += 1;
+                        if *silent_ticks > HOST_TIMEOUT_TICKS {
+                            own = None;
+                            mode = idle();
+                            dirty = true;
+                            continue;
+                        }
+                        header_tick = header_tick.wrapping_add(1);
+                        page_tick += 1;
+                        let flip = page_tick >= MIN_PAGE_TICKS;
+                        if flip {
+                            page = page.wrapping_add(1);
+                            page_tick = 0;
+                        }
+                        dirty = flip || drawn.animated;
                     }
                     Mode::Idle { ticks, tank } => {
                         *ticks += 1;

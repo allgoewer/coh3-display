@@ -48,19 +48,22 @@ impl LogTail {
         let mut file = match File::open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let was_read = self.offset > 0;
                 self.reset();
-                return Ok(Vec::new());
+                return Ok(if was_read { vec![LogEvent::Closed] } else { Vec::new() });
             }
             Err(err) => return Err(err),
         };
 
         let len = file.metadata()?.len();
+        let mut matches = Vec::new();
         if len < self.offset {
-            // The game recreates the log on every launch.
+            // The game recreates the log on every launch, so the run it had logged is over.
             self.reset();
+            matches.push(LogEvent::Closed);
         }
         if len == self.offset {
-            return Ok(Vec::new());
+            return Ok(matches);
         }
 
         file.seek(SeekFrom::Start(self.offset))?;
@@ -70,11 +73,10 @@ impl LogTail {
         self.partial.extend_from_slice(&appended);
 
         let Some(last_newline) = self.partial.iter().rposition(|&b| b == b'\n') else {
-            return Ok(Vec::new());
+            return Ok(matches);
         };
         let complete: Vec<u8> = self.partial.drain(..=last_newline).collect();
 
-        let mut matches = Vec::new();
         // Drop the final newline so splitting does not produce a phantom empty last line.
         for line in complete[..last_newline].split(|&b| b == b'\n') {
             let line = String::from_utf8_lossy(line);
@@ -111,7 +113,7 @@ mod tests {
             .into_iter()
             .filter_map(|event| match event {
                 LogEvent::Started(started) => Some(started),
-                LogEvent::Left => None,
+                _ => None,
             })
             .collect()
     }
@@ -159,9 +161,14 @@ mod tests {
 
         let first_match: String = LOG.lines().skip(10).take(8).map(|l| format!("{l}\n")).collect();
         fs::write(&path, first_match).unwrap();
-        let matches = started(&mut tail);
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].map(), "elst_outskirts_4p");
+        let events = tail.poll().unwrap();
+        // A new log means the run of the game that wrote the old one is over.
+        assert_eq!(events.first(), Some(&LogEvent::Closed));
+        let Some(LogEvent::Started(started)) = events.last() else {
+            panic!("expected the match, got {events:?}");
+        };
+        assert_eq!(events.len(), 2);
+        assert_eq!(started.map(), "elst_outskirts_4p");
 
         fs::remove_file(&path).unwrap();
     }

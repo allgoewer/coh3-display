@@ -17,7 +17,7 @@ use crate::applog::log;
 use crate::firmware::{self, BoardWifi, FirmwareState};
 use crate::i18n::Lang;
 use crate::maps;
-use crate::model::{Faction, MatchInfo, Phase, PlayerInfo};
+use crate::model::{Faction, MatchInfo, OwnStats, Phase, PlayerInfo};
 use crate::settings::{Brightness, Settings};
 
 /// USB-Serial-JTAG of Espressif chips.
@@ -96,6 +96,8 @@ pub struct LinkStatus {
 #[derive(Clone)]
 pub struct LinkContext {
     pub matches: watch::Receiver<Option<MatchInfo>>,
+    /// The player's own ratings, while the game is running.
+    pub own: watch::Receiver<Option<OwnStats>>,
     pub settings: watch::Receiver<Settings>,
     pub status: Arc<watch::Sender<LinkStatus>>,
     /// The language of what the display shows: the map's title.
@@ -184,13 +186,39 @@ pub const IDLE_FRAME: &str = "I\n";
 
 /// What the display should be told right now: the match while it is worth showing,
 /// otherwise to go idle.
-pub fn frame_for(info: Option<&MatchInfo>, settings: &Settings, lang: Lang) -> String {
-    match info {
-        Some(info) if info.phase != Phase::Over || settings.keep_last_match => {
+pub fn frame_for(info: Option<&MatchInfo>, own: Option<&OwnStats>, settings: &Settings, lang: Lang) -> String {
+    match (info, own) {
+        (Some(info), _) if info.phase != Phase::Over || settings.keep_last_match => {
             encode(info, settings.show_own_team, lang, settings.brightness)
         }
+        // In the menu: the player's own ratings stand in for the idle screen.
+        (_, Some(own)) if settings.own_stats => encode_own(own),
         _ => IDLE_FRAME.to_string(),
     }
+}
+
+/// Encodes the player's own ratings as one protocol frame.
+pub fn encode_own(own: &OwnStats) -> String {
+    let mut frame = format!("S\t{}\n", sanitize(&own.name));
+    for (mode, ratings) in ["1v1", "2v2"].iter().zip(&own.ratings) {
+        let _ = write!(frame, "R\t{mode}");
+        for rating in ratings {
+            let _ = match rating {
+                Some(rating) => write!(frame, "\t{rating}"),
+                None => write!(frame, "\t-"),
+            };
+        }
+        frame.push('\n');
+    }
+    frame.push_str("E\n");
+    frame
+}
+
+/// A frame as it goes into a UDP datagram, where the display's firmware is not known. One
+/// from before 1.3.0 does not know the ratings frame and would not answer it, so an idle
+/// line goes in front: old firmware goes idle on it, new firmware takes the last frame.
+pub fn datagram(frame: &str) -> String {
+    if frame.starts_with("S\t") { format!("{IDLE_FRAME}{frame}") } else { frame.to_string() }
 }
 
 /// The first connected ESP USB serial port, if any.
@@ -316,6 +344,7 @@ fn serve(
             return Ok(Stop::Closed);
         };
         let settings_changed = ctx.settings.has_changed().unwrap_or(false);
+        let own_changed = ctx.own.has_changed().unwrap_or(false);
         let settings = *ctx.settings.borrow_and_update();
         if !settings.usb {
             return Ok(Stop::Disabled);
@@ -361,8 +390,10 @@ fn serve(
         }
 
         let is_display = matches!(link.firmware, FirmwareState::Current(_));
-        if is_display && (match_changed || settings_changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND)) {
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), &settings, ctx.lang);
+        let changed = match_changed || own_changed || settings_changed;
+        if is_display && (changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND)) {
+            let own = ctx.own.borrow_and_update().clone();
+            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), own.as_ref(), &settings, ctx.lang);
             let ack = send_frame(port, &frame)?;
             if link.ack != Some(ack) {
                 log(format!("Display on {port_name}: {}", ack.describe()));
@@ -496,15 +527,15 @@ mod tests {
     fn sends_idle_instead_of_a_match_that_is_over() {
         let settings = Settings::default();
         let mut info = two_v_two();
-        assert_eq!(frame_for(None, &settings, Lang::En), "I\n");
-        assert!(frame_for(Some(&info), &settings, Lang::En).starts_with("M\t2v2\tEl Alamein\n"));
+        assert_eq!(frame_for(None, None, &settings, Lang::En), "I\n");
+        assert!(frame_for(Some(&info), None, &settings, Lang::En).starts_with("M\t2v2\tEl Alamein\n"));
         info.phase = Phase::Lingering;
-        assert!(frame_for(Some(&info), &settings, Lang::En).starts_with("M\t"));
+        assert!(frame_for(Some(&info), None, &settings, Lang::En).starts_with("M\t"));
         info.phase = Phase::Over;
-        assert_eq!(frame_for(Some(&info), &settings, Lang::En), "I\n");
+        assert_eq!(frame_for(Some(&info), None, &settings, Lang::En), "I\n");
 
         let keep = Settings { keep_last_match: true, ..settings };
-        assert!(frame_for(Some(&info), &keep, Lang::En).starts_with("M\t"));
+        assert!(frame_for(Some(&info), None, &keep, Lang::En).starts_with("M\t"));
     }
 
     fn two_v_two() -> MatchInfo {
@@ -642,6 +673,52 @@ mod tests {
         assert_eq!(parse("M\t2v2\tEl Alamein\nE"), 2);
         assert_eq!(parse("M\t2v2\tEl Alamein\nB\tx\nE"), 2);
         assert_eq!(parse("M\t2v2\tEl Alamein\nB\t9\nE"), 2);
+    }
+
+    fn own() -> OwnStats {
+        OwnStats {
+            name: "Nullgerät".to_string(),
+            ratings: [[Some(1207), None, None, None], [Some(1408), None, None, Some(1369)]],
+        }
+    }
+
+    #[test]
+    fn shows_own_ratings_when_there_is_no_match_to_show() {
+        let settings = Settings::default();
+        let stats = "S\tNullgerät\nR\t1v1\t1207\t-\t-\t-\nR\t2v2\t1408\t-\t-\t1369\nE\n";
+        assert_eq!(frame_for(None, Some(&own()), &settings, Lang::En), stats);
+
+        // A match that is on, or only just over, comes first; a finished one does not.
+        let mut info = two_v_two();
+        assert!(frame_for(Some(&info), Some(&own()), &settings, Lang::En).starts_with("M\t"));
+        info.phase = Phase::Lingering;
+        assert!(frame_for(Some(&info), Some(&own()), &settings, Lang::En).starts_with("M\t"));
+        info.phase = Phase::Over;
+        assert_eq!(frame_for(Some(&info), Some(&own()), &settings, Lang::En), stats);
+
+        let off = Settings { own_stats: false, ..settings };
+        assert_eq!(frame_for(None, Some(&own()), &off, Lang::En), "I\n");
+    }
+
+    #[test]
+    fn firmware_parser_understands_own_ratings() {
+        let frame = encode_own(&own());
+        let mut parser = device::Parser::new();
+        let parsed = frame.lines().find_map(|line| parser.feed_line(line));
+        let Some(device::Frame::Stats(parsed)) = parsed else {
+            panic!("frame ends with E, got {parsed:?}");
+        };
+        assert_eq!(parsed.name.as_str(), "Nullgerät");
+        assert_eq!(parsed.ratings, [[Some(1207), None, None, None], [Some(1408), None, None, Some(1369)]]);
+
+        // In a datagram the frame follows an idle line, which is all that older firmware
+        // understands of it; this firmware takes the ratings.
+        let packet = datagram(&frame);
+        assert!(packet.starts_with("I\nS\t"));
+        assert!(matches!(device::parse_datagram(packet.as_bytes()), Some(device::Frame::Stats(_))));
+        // A match goes out as it is.
+        let frame = encode(&two_v_two(), false, Lang::En, Brightness::Normal);
+        assert_eq!(datagram(&frame), frame);
     }
 
     #[test]

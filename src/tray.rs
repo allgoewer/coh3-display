@@ -229,6 +229,7 @@ impl App {
             Toggle::ShowOwnTeam => settings.show_own_team = !settings.show_own_team,
             Toggle::AutoUpdateFirmware => settings.auto_update_firmware = !settings.auto_update_firmware,
             Toggle::KeepLastMatch => settings.keep_last_match = !settings.keep_last_match,
+            Toggle::OwnStats => settings.own_stats = !settings.own_stats,
             Toggle::Autostart => {}
         };
         if toggle == Toggle::Autostart {
@@ -247,6 +248,7 @@ impl App {
             Toggle::ShowOwnTeam => self.ctx.saved.show_own_team = effective.show_own_team,
             Toggle::AutoUpdateFirmware => self.ctx.saved.auto_update_firmware = effective.auto_update_firmware,
             Toggle::KeepLastMatch => self.ctx.saved.keep_last_match = effective.keep_last_match,
+            Toggle::OwnStats => self.ctx.saved.own_stats = effective.own_stats,
             Toggle::Autostart => {}
         }
         self.save_settings();

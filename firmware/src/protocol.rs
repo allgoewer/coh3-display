@@ -40,10 +40,19 @@ pub struct Match {
     pub players: Vec<Player, MAX_PLAYERS>,
 }
 
+/// The player's own ratings, for the time the game sits in its menu.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnStats {
+    pub name: String<48>,
+    /// 1v1 and 2v2, each for the factions A, B, D, G; `None` where there are no games.
+    pub ratings: [[Option<u16>; 4]; 2],
+}
+
 /// What the host can ask the screen to show.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
     Match(Match),
+    Stats(OwnStats),
     /// Nothing worth showing: the match is over, or there is none.
     Idle,
 }
@@ -77,18 +86,39 @@ fn parse_player<'a>(mut fields: impl Iterator<Item = &'a str>) -> Option<Player>
 /// Assembles frames from protocol lines.
 pub struct Parser {
     pending: Option<Match>,
+    pending_stats: Option<OwnStats>,
 }
 
 impl Parser {
     pub const fn new() -> Self {
-        Self { pending: None }
+        Self { pending: None, pending_stats: None }
     }
 
     /// Feeds one line without its newline. Returns the frame when the line completes one.
     pub fn feed_line(&mut self, line: &str) -> Option<Frame> {
         let mut fields = line.trim_end_matches('\r').split('\t');
         match fields.next()? {
+            "S" => {
+                self.pending = None;
+                self.pending_stats =
+                    Some(OwnStats { name: fit(fields.next().unwrap_or("")), ratings: [[None; 4]; 2] });
+                None
+            }
+            "R" => {
+                let row = match fields.next() {
+                    Some("1v1") => 0,
+                    Some("2v2") => 1,
+                    _ => return None,
+                };
+                if let Some(stats) = &mut self.pending_stats {
+                    for rating in &mut stats.ratings[row] {
+                        *rating = fields.next().and_then(|rating| rating.parse().ok());
+                    }
+                }
+                None
+            }
             "M" => {
+                self.pending_stats = None;
                 self.pending = Some(Match {
                     mode: fit(fields.next().unwrap_or("")),
                     map: fit(fields.next().unwrap_or("")),
@@ -111,9 +141,13 @@ impl Parser {
                 }
                 None
             }
-            "E" => self.pending.take().map(Frame::Match),
+            "E" => {
+                let stats = self.pending_stats.take().map(Frame::Stats);
+                self.pending.take().map(Frame::Match).or(stats)
+            }
             "I" => {
                 self.pending = None;
+                self.pending_stats = None;
                 Some(Frame::Idle)
             }
             _ => None,

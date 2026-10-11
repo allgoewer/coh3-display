@@ -38,8 +38,12 @@ fn parse_player(rest: &str, ai: bool) -> Option<LoggedPlayer> {
 pub enum LogEvent {
     /// A match was set up and is loading.
     Started(LoggedMatch),
-    /// The player left the match they were in: back to the menu, or the game closed.
+    /// The player left the match they were in and is back in the menu.
     Left,
+    /// The game logged the account in; from here on it is running, in the menu or a match.
+    LoggedIn(u64),
+    /// The game was closed, which also ends any match.
+    Closed,
 }
 
 /// Builds matches out of log lines fed one at a time.
@@ -59,10 +63,11 @@ impl MatchAssembler {
     pub fn feed(&mut self, line: &str) -> Option<LogEvent> {
         let (time, message) = split_prefix(line);
 
-        let leaving = message.starts_with("GameApp::SetState : new (UnloadingGame)")
-            || message.starts_with("Application closed");
-        if leaving {
+        if message.starts_with("GameApp::SetState : new (UnloadingGame)") {
             return Some(self.finish().map_or(LogEvent::Left, LogEvent::Started));
+        }
+        if message.starts_with("Application closed") {
+            return Some(self.finish().map_or(LogEvent::Closed, LogEvent::Started));
         }
 
         if let Some(game) = message.strip_prefix("GAME -- ") {
@@ -104,6 +109,8 @@ impl MatchAssembler {
             self.pending_match_type = rest.split_whitespace().next().map(str::to_string);
         } else if let Some((_, rest)) = message.split_once("LocalProfileID: ") {
             self.local_profile_id = rest.trim().parse().ok();
+            let logged_in = self.local_profile_id.map(LogEvent::LoggedIn);
+            return self.finish().map(LogEvent::Started).or(logged_in);
         }
 
         self.finish().map(LogEvent::Started)
@@ -194,16 +201,23 @@ mod tests {
     }
 
     #[test]
+    fn reports_the_login() {
+        let mut assembler = MatchAssembler::new();
+        let first = LOG.lines().next().unwrap();
+        assert_eq!(assembler.feed(first), Some(LogEvent::LoggedIn(63411)));
+    }
+
+    #[test]
     fn reports_leaving_a_match() {
         let mut assembler = MatchAssembler::new();
         let leaving = [
             "(I) [00:41:00.123] [000015420]: GameApp::SetState : new (UnloadingGame) old (Game)",
             "(I) [00:41:06.000] [000015420]: GAME -- Scenario: data:scenarios\\frontend\\showcase\\italy\\showcase_italy",
-            "Application closed without errors",
         ];
         for line in leaving {
             assert_eq!(assembler.feed(line), Some(LogEvent::Left), "{line}");
         }
+        assert_eq!(assembler.feed("Application closed without errors"), Some(LogEvent::Closed));
         // Loading into a match and the result screen are not leaving.
         let staying = [
             "(I) [00:06:48.000] [000015420]: GameApp::SetState : new (Game) old (LoadingGame)",

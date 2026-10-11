@@ -187,7 +187,7 @@ async fn run_once(args: &Args, mut tail: LogTail, client: RelicClient, settings:
         .rev()
         .find_map(|event| match event {
             LogEvent::Started(logged) => Some(logged),
-            LogEvent::Left => None,
+            _ => None,
         })
         .with_context(|| format!("no match found in {}", tail.path().display()))?;
     let info = client.enrich(&latest).await;
@@ -259,16 +259,17 @@ fn main() -> Result<()> {
     log(format!("Watching {}", path.display()));
 
     let (match_tx, matches) = watch::channel(None);
+    let (own_tx, own) = watch::channel(None);
     let (settings_tx, settings_rx) = watch::channel(settings);
     let (status_tx, links) = watch::channel(LinkStatus::default());
     let settings_tx = Arc::new(settings_tx);
-    let ctx = LinkContext { matches: matches.clone(), settings: settings_rx, status: Arc::new(status_tx), lang };
+    let ctx = LinkContext { matches: matches.clone(), own, settings: settings_rx, status: Arc::new(status_tx), lang };
     let (commands, command_rx) = mpsc::channel();
     display_link::spawn(args.serial.clone(), ctx.clone(), command_rx);
     display_link::udp::spawn(args.display_addr, ctx);
 
     let linger = args.linger_secs.map_or(coh3_display::LINGER, Duration::from_secs);
-    runtime.spawn(coh3_display::track(tail, client, match_tx, Duration::from_secs(1), linger));
+    runtime.spawn(coh3_display::track(tail, client, match_tx, own_tx, Duration::from_secs(1), linger));
     let mut printed = matches.clone();
     runtime.spawn(async move {
         let mut last_match = None;

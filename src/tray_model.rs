@@ -14,6 +14,7 @@ pub enum Toggle {
     ShowOwnTeam,
     AutoUpdateFirmware,
     KeepLastMatch,
+    OwnStats,
     Autostart,
 }
 
@@ -156,6 +157,7 @@ pub fn build(
         check(Toggle::ShowOwnTeam, settings.show_own_team),
         check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
         check(Toggle::KeepLastMatch, settings.keep_last_match),
+        check(Toggle::OwnStats, settings.own_stats),
         check(Toggle::Autostart, autostart),
         Entry::Brightness {
             label: lang.brightness_menu(),
@@ -289,6 +291,11 @@ mod tests {
             checked: true,
             toggle: Toggle::Autostart
         }));
+        assert!(model.entries.contains(&Entry::Check {
+            label: "Show own ratings in the menu",
+            checked: true,
+            toggle: Toggle::OwnStats
+        }));
         assert!(model.entries.contains(&Entry::Brightness {
             label: "Display brightness",
             options: vec![("Low", Brightness::Low), ("Normal", Brightness::Normal), ("High", Brightness::High)],
@@ -326,6 +333,11 @@ mod tests {
             label: "Mit Windows starten",
             checked: false,
             toggle: Toggle::Autostart
+        }));
+        assert!(model.entries.contains(&Entry::Check {
+            label: "Eigene Wertungen im Menü anzeigen",
+            checked: true,
+            toggle: Toggle::OwnStats
         }));
 
         let dim = Settings { brightness: Brightness::Low, ..Settings::default() };

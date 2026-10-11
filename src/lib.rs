@@ -3,6 +3,7 @@ pub mod applog;
 pub mod autostart;
 pub mod display_link;
 pub mod firmware;
+pub mod game;
 pub mod i18n;
 pub mod icon;
 pub mod log_parser;
@@ -20,7 +21,7 @@ use tokio::sync::watch;
 
 use crate::applog::log;
 use crate::log_parser::LogEvent;
-use crate::model::{MatchInfo, Phase};
+use crate::model::{MatchInfo, OwnStats, Phase};
 use crate::relic::RelicClient;
 use crate::watcher::LogTail;
 
@@ -49,11 +50,24 @@ pub fn phase(left: Option<Left>, log_quiet_for: Option<Duration>, linger: Durati
     }
 }
 
-/// Follows the log forever and publishes the latest match, with stats and its phase, on `tx`.
+/// How often the game's process is looked for, and its player's own ratings are refreshed.
+const PROCESS_CHECK: Duration = Duration::from_secs(5);
+const OWN_STATS_REFRESH: Duration = Duration::from_secs(120);
+const OWN_STATS_RETRY: Duration = Duration::from_secs(30);
+
+/// Whose ratings to show: the logged-in account, as long as the game is really running.
+/// The log alone cannot tell, because a game that crashed never logs that it closed.
+pub fn player_in_game(logged_in: Option<u64>, process_running: bool) -> Option<u64> {
+    logged_in.filter(|_| process_running)
+}
+
+/// Follows the log forever and publishes the latest match, with stats and its phase, on `tx`,
+/// and on `own_tx` the player's own ratings for as long as the game is running.
 pub async fn track(
     mut tail: LogTail,
     client: RelicClient,
     tx: watch::Sender<Option<MatchInfo>>,
+    own_tx: watch::Sender<Option<OwnStats>>,
     interval: Duration,
     linger: Duration,
 ) {
@@ -61,6 +75,10 @@ pub async fn track(
     // `None` while the match is on; otherwise when it was left (`None` inside: before startup).
     let mut left: Option<Option<Instant>> = None;
     let mut first_poll = true;
+    let mut logged_in: Option<u64> = None;
+    let mut process: Option<(Instant, bool)> = None;
+    // When the own ratings were last asked for, and when to ask again.
+    let mut own_asked: Option<(Instant, Duration)> = None;
     loop {
         match tail.poll() {
             Ok(events) => {
@@ -72,10 +90,17 @@ pub async fn track(
                             started = Some(logged);
                             left = None;
                         }
-                        LogEvent::Left if left.is_none() => {
-                            left = Some((!first_poll).then(Instant::now));
+                        LogEvent::LoggedIn(profile_id) => logged_in = Some(profile_id),
+                        LogEvent::Left | LogEvent::Closed => {
+                            if event == LogEvent::Closed {
+                                logged_in = None;
+                            }
+                            if left.is_none() {
+                                left = Some((!first_poll).then(Instant::now));
+                                // The match that just ended has moved the ratings.
+                                own_asked = None;
+                            }
                         }
-                        LogEvent::Left => {}
                     }
                 }
                 first_poll = false;
@@ -100,6 +125,40 @@ pub async fn track(
                 return;
             }
         }
+
+        if process.is_none_or(|(at, _)| at.elapsed() >= PROCESS_CHECK) {
+            process = Some((Instant::now(), logged_in.is_some() && game::is_running()));
+        }
+        let player = player_in_game(logged_in, process.is_some_and(|(_, running)| running));
+        match player {
+            // During a match the opponents are shown, and the ratings do not move.
+            Some(profile_id) if current.as_ref().is_none_or(|info| info.phase != Phase::Live) => {
+                if own_asked.is_none_or(|(at, wait)| at.elapsed() >= wait) {
+                    let wait = match client.own_stats(profile_id).await {
+                        Ok(own) => {
+                            own_tx.send_if_modified(|published| {
+                                let changed = published.as_ref() != Some(&own);
+                                if changed {
+                                    *published = Some(own);
+                                }
+                                changed
+                            });
+                            OWN_STATS_REFRESH
+                        }
+                        Err(err) => {
+                            log(format!("Could not fetch the player's own ratings: {err:#}"));
+                            OWN_STATS_RETRY
+                        }
+                    };
+                    own_asked = Some((Instant::now(), wait));
+                }
+            }
+            Some(_) => {}
+            None => {
+                own_asked = None;
+                own_tx.send_if_modified(|published| published.take().is_some());
+            }
+        }
         tokio::time::sleep(interval).await;
     }
 }
@@ -109,6 +168,15 @@ mod tests {
     use super::*;
 
     const MINUTE: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn own_ratings_need_a_login_and_a_running_game() {
+        assert_eq!(player_in_game(Some(63411), true), Some(63411));
+        // Closed, or never logged in.
+        assert_eq!(player_in_game(None, true), None);
+        // Crashed: the log still says logged in, but the process is gone.
+        assert_eq!(player_in_game(Some(63411), false), None);
+    }
 
     #[test]
     fn a_match_is_live_until_it_is_left() {

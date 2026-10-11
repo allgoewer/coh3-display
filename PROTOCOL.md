@@ -22,11 +22,40 @@ The display is an OLED, which wears where it is lit, so it only shows a match wh
 current:
 
 - The host sends the match while it is being played and for 5 minutes after the player left
-  it; before and after that it sends `I`.
+  it; before and after that it sends `I`, or the player's own ratings (below) while the game
+  is running.
 - A display that has heard nothing for 30 seconds goes idle on its own (the host is gone).
 - Idle is a small tank (a Tiger or a Sherman) at the lowest brightness, driving across the screen below the top 16
   rows on a different row each time (the yellow part of the panel stays dark). After power-on and after a change of
   its WiFi state the display shows a status screen for 30 seconds first.
+
+## The player's own ratings
+
+While the game is open but no match is being shown, the host sends this frame in place of
+`I` (since firmware 1.3.0; it can be switched off in the app):
+
+```
+S <name>
+R <mode> <usf> <ukf> <dak> <wehr>
+E
+```
+
+| line | meaning |
+|---|---|
+| `S` | starts the frame and discards any unfinished one. `name` is the player's, made safe like a player's `name` below. |
+| `R` | one per mode, `1v1` and `2v2`: the ELO for each faction in this order, or `-` where the player has no games. |
+| `E` | ends the frame, answered as for a match. |
+
+The display shows the name in its header and one page per mode, at low brightness whatever
+the `B` level of matches is, because the menu can stay open for hours. Like a match it goes
+idle after 30 seconds without a frame.
+
+Firmware before 1.3.0 does not know these lines and would not answer the frame. Over serial
+the host only sends frames to a board whose firmware is current. In a UDP datagram, where
+it cannot tell, it puts an `I` line in front of the frame: older firmware acts on that and
+goes idle, newer firmware shows the last complete frame of a datagram, the ratings.
+
+## Who is sent
 
 The host only sends the opposing team. When the local player is not in the match (a replay),
 it sends everyone.

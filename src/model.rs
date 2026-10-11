@@ -10,6 +10,9 @@ pub enum Faction {
 }
 
 impl Faction {
+    /// In the order the display lists them.
+    pub const ALL: [Faction; 4] = [Faction::American, Faction::British, Faction::Dak, Faction::German];
+
     /// Maps the faction name used in `warnings.log` to a playable faction.
     pub fn from_log(name: &str) -> Option<Self> {
         match name {
@@ -91,6 +94,16 @@ pub struct PlayerInfo {
     pub country: Option<String>,
     /// `None` when the player has no games on that leaderboard, or stats could not be fetched.
     pub stats: Option<PlayerStats>,
+}
+
+/// The local player's own ratings, shown while the game is open but no match is on.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct OwnStats {
+    /// The player's name; empty when the API did not give one.
+    pub name: String,
+    /// ELO for 1v1 and 2v2 (in this order), each for the factions in [`Faction::ALL`]'s
+    /// order. `None` where the player has no games.
+    pub ratings: [[Option<i64>; 4]; 2],
 }
 
 /// Where a match stands, which decides whether the display shows it.
