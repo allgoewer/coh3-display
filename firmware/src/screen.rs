@@ -340,8 +340,9 @@ fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, tank: &Tank) {
 ///
 /// ```text
 /// 1v1
-/// USF  1207 UKF  1150
-/// DAK  -    Wehr 1369
+/// USF 1207   UKF 1150
+///
+/// DAK -     Wehr 1369
 /// ```
 fn draw_stats<D: DrawTarget<Color = BinaryColor>>(target: &mut D, own: &OwnStats, page: usize, tick: u32) -> Drawn {
     let _ = target.clear(BinaryColor::Off);
@@ -352,12 +353,16 @@ fn draw_stats<D: DrawTarget<Color = BinaryColor>>(target: &mut D, own: &OwnStats
     for (index, (rating, faction)) in own.ratings[page].iter().zip(['A', 'B', 'D', 'G']).enumerate() {
         let mut cell: String<12> = String::new();
         let _ = match rating {
-            Some(rating) => write!(cell, "{:<4} {rating}", faction_name(faction)),
-            None => write!(cell, "{:<4} -", faction_name(faction)),
+            Some(rating) => write!(cell, "{} {rating}", faction_name(faction)),
+            None => write!(cell, "{} -", faction_name(faction)),
         };
-        // Two columns of nine characters, two rows.
-        let at = Point::new((index % 2) as i32 * 65, HEADER_HEIGHT + 19 + (index / 2) as i32 * 14);
-        text(target, &cell, at, &FONT_7X13_BOLD);
+        // Two columns, the left one against the left edge and the right one against the
+        // right edge, which keeps them apart: only "Wehr 1302" is nine characters long.
+        let font = &FONT_7X13_BOLD;
+        let x = if index % 2 == 0 { 0 } else { WIDTH - text_width(&cell, font) };
+        // Two rows with 5 pixels between them. The upper one starts on the mode line's last
+        // row, which is empty: its letters have no tails.
+        text(target, &cell, Point::new(x, HEADER_HEIGHT + 17 + (index / 2) as i32 * 18), font);
     }
     Drawn { player_overflow: 0, animated: overflow > 0 }
 }
