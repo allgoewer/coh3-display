@@ -5,7 +5,7 @@ use crate::firmware::{BoardWifi, FirmwareState};
 use crate::i18n::Lang;
 use crate::maps;
 use crate::model::{Faction, MatchInfo, PlayerInfo};
-use crate::settings::{Brightness, Settings};
+use crate::settings::{Brightness, ModeSet, Settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Toggle {
@@ -14,7 +14,8 @@ pub enum Toggle {
     ShowOwnTeam,
     AutoUpdateFirmware,
     KeepLastMatch,
-    OwnStats,
+    /// One of the modes whose own ratings are shown: 0 for 1v1 up to 3 for 4v4.
+    OwnRating(usize),
     Autostart,
 }
 
@@ -32,6 +33,8 @@ pub enum Entry {
     /// Opens the player's coh3stats.com page when a profile is known.
     Player { label: String, profile_id: Option<u64> },
     Check { label: &'static str, checked: bool, toggle: Toggle },
+    /// A submenu of switches that belong together, each with its label and state.
+    Group { label: &'static str, checks: Vec<(&'static str, bool, Toggle)> },
     /// A submenu to pick the display's brightness from; `current` is the one ticked.
     Brightness { label: &'static str, options: Vec<(&'static str, Brightness)>, current: Brightness },
     /// Something to do with the board on USB; asks before it acts.
@@ -164,7 +167,15 @@ pub fn build(
         check(Toggle::ShowOwnTeam, settings.show_own_team),
         check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
         check(Toggle::KeepLastMatch, settings.keep_last_match),
-        check(Toggle::OwnStats, settings.own_stats),
+        Entry::Group {
+            label: lang.own_ratings_menu(),
+            checks: (0..ModeSet::NAMES.len())
+                .map(|mode| {
+                    let toggle = Toggle::OwnRating(mode);
+                    (lang.toggle(toggle), settings.own_ratings.contains(mode), toggle)
+                })
+                .collect(),
+        },
         check(Toggle::Autostart, autostart),
         Entry::Brightness {
             label: lang.brightness_menu(),
@@ -317,10 +328,14 @@ mod tests {
             checked: true,
             toggle: Toggle::Autostart
         }));
-        assert!(model.entries.contains(&Entry::Check {
-            label: "Show own ratings in the menu",
-            checked: true,
-            toggle: Toggle::OwnStats
+        assert!(model.entries.contains(&Entry::Group {
+            label: "Own ratings in the menu",
+            checks: vec![
+                ("1v1", true, Toggle::OwnRating(0)),
+                ("2v2", true, Toggle::OwnRating(1)),
+                ("3v3", false, Toggle::OwnRating(2)),
+                ("4v4", false, Toggle::OwnRating(3)),
+            ],
         }));
         assert!(model.entries.contains(&Entry::Brightness {
             label: "Display brightness",
@@ -360,14 +375,22 @@ mod tests {
             checked: false,
             toggle: Toggle::Autostart
         }));
-        assert!(model.entries.contains(&Entry::Check {
-            label: "Eigene Wertungen im Menü anzeigen",
-            checked: true,
-            toggle: Toggle::OwnStats
-        }));
 
-        let dim = Settings { brightness: Brightness::Low, ..Settings::default() };
+        let dim = Settings {
+            brightness: Brightness::Low,
+            own_ratings: ModeSet::new(&[2, 3]),
+            ..Settings::default()
+        };
         let model = build(None, &LinkStatus::default(), &dim, false, None, None, Lang::De);
+        assert!(model.entries.contains(&Entry::Group {
+            label: "Eigene Wertungen im Menü",
+            checks: vec![
+                ("1v1", false, Toggle::OwnRating(0)),
+                ("2v2", false, Toggle::OwnRating(1)),
+                ("3v3", true, Toggle::OwnRating(2)),
+                ("4v4", true, Toggle::OwnRating(3)),
+            ],
+        }));
         assert!(model.entries.contains(&Entry::Brightness {
             label: "Display-Helligkeit",
             options: vec![("Niedrig", Brightness::Low), ("Normal", Brightness::Normal), ("Hoch", Brightness::High)],

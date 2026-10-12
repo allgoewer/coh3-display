@@ -44,7 +44,7 @@ E
 | line | meaning |
 |---|---|
 | `S` | starts the frame and discards any unfinished one. `name` is the player's, made safe like a player's `name` below. |
-| `R` | one per mode, `1v1` and `2v2`: the ELO for each faction in this order, or `-` where the player has no games. |
+| `R` | one per mode the user chose in the app, `1v1` to `4v4` (`3v3` and `4v4` since firmware 1.4.0): the ELO for each faction in this order, or `-` where the player has no games. The display shows one page per line, in the order they arrive. |
 | `E` | ends the frame, answered as for a match. |
 
 The display shows the name in its header and one page per mode. Like a match it goes idle

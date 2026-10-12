@@ -113,7 +113,7 @@ impl RelicClient {
         Ok(response)
     }
 
-    /// Looks up the 1v1 and 2v2 ratings of one player.
+    /// Looks up the ratings of one player in every mode.
     pub async fn own_stats(&self, profile_id: u64) -> Result<OwnStats> {
         Ok(own_stats(&self.personal_stats(&[profile_id]).await?, profile_id))
     }
@@ -128,7 +128,7 @@ impl RelicClient {
     }
 }
 
-/// Picks a player's 1v1 and 2v2 ratings for every faction out of a response.
+/// Picks a player's ratings for every mode and faction out of a response.
 pub fn own_stats(response: &PersonalStatResponse, profile_id: u64) -> OwnStats {
     let member = response
         .stat_groups
@@ -145,7 +145,7 @@ pub fn own_stats(response: &PersonalStatResponse, profile_id: u64) -> OwnStats {
     };
     OwnStats {
         name: member.map(|member| member.alias.clone()).unwrap_or_default(),
-        ratings: [1, 2].map(|team_size| Faction::ALL.map(|faction| rating(team_size, faction))),
+        ratings: [1, 2, 3, 4].map(|team_size| Faction::ALL.map(|faction| rating(team_size, faction))),
     }
 }
 
@@ -275,6 +275,8 @@ mod tests {
         // 1v1: only USF. 2v2: USF and Wehrmacht.
         assert_eq!(own.ratings[0], [Some(1207), None, None, None]);
         assert_eq!(own.ratings[1], [Some(1408), None, None, Some(1369)]);
+        // No 3v3 or 4v4 games in this response.
+        assert_eq!(own.ratings[2..], [[None; 4]; 2]);
 
         // Someone the response does not know has no name and no ratings.
         assert_eq!(own_stats(&response, 1), OwnStats::default());

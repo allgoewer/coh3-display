@@ -4,7 +4,7 @@
 use crate::display_link::{Ack, OutcomeKind};
 use crate::firmware::CredentialError;
 use crate::model::Phase;
-use crate::settings::Brightness;
+use crate::settings::{Brightness, ModeSet};
 use crate::tray_model::Toggle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -186,10 +186,18 @@ impl Lang {
             (Lang::De, Toggle::AutoUpdateFirmware) => "Display-Firmware automatisch aktualisieren",
             (Lang::En, Toggle::KeepLastMatch) => "Keep last match on display",
             (Lang::De, Toggle::KeepLastMatch) => "Letztes Match auf dem Display behalten",
-            (Lang::En, Toggle::OwnStats) => "Show own ratings in the menu",
-            (Lang::De, Toggle::OwnStats) => "Eigene Wertungen im Menü anzeigen",
+            // The modes are called the same in both languages.
+            (_, Toggle::OwnRating(mode)) => ModeSet::NAMES.get(mode).copied().unwrap_or(""),
             (Lang::En, Toggle::Autostart) => "Start with Windows",
             (Lang::De, Toggle::Autostart) => "Mit Windows starten",
+        }
+    }
+
+    /// The submenu of modes whose own ratings the display shows while the game is in its menu.
+    pub fn own_ratings_menu(self) -> &'static str {
+        match self {
+            Lang::En => "Own ratings in the menu",
+            Lang::De => "Eigene Wertungen im Menü",
         }
     }
 

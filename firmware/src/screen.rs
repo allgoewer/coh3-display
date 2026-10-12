@@ -346,11 +346,18 @@ fn draw_idle<D: DrawTarget<Color = BinaryColor>>(target: &mut D, tank: &Tank) {
 /// ```
 fn draw_stats<D: DrawTarget<Color = BinaryColor>>(target: &mut D, own: &OwnStats, page: usize, tick: u32) -> Drawn {
     let _ = target.clear(BinaryColor::Off);
-    let page = page % own.ratings.len();
-    let overflow = draw_title(target, &own.name, page, own.ratings.len(), tick);
+    // The parser only passes ratings on that have a page.
+    let pages = own.pages.len().max(1);
+    let page = page % pages;
+    let overflow = draw_title(target, &own.name, page, pages, tick);
+    let Some((team_size, ratings)) = own.pages.get(page) else {
+        return Drawn { player_overflow: 0, animated: overflow > 0 };
+    };
 
-    text(target, if page == 0 { "1v1" } else { "2v2" }, Point::new(0, HEADER_HEIGHT), &FONT_9X18_BOLD);
-    for (index, (rating, faction)) in own.ratings[page].iter().zip(['A', 'B', 'D', 'G']).enumerate() {
+    let mut mode: String<4> = String::new();
+    let _ = write!(mode, "{team_size}v{team_size}");
+    text(target, &mode, Point::new(0, HEADER_HEIGHT), &FONT_9X18_BOLD);
+    for (index, (rating, faction)) in ratings.iter().zip(['A', 'B', 'D', 'G']).enumerate() {
         let mut cell: String<12> = String::new();
         let _ = match rating {
             Some(rating) => write!(cell, "{} {rating}", faction_name(faction)),

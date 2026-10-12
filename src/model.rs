@@ -101,9 +101,9 @@ pub struct PlayerInfo {
 pub struct OwnStats {
     /// The player's name; empty when the API did not give one.
     pub name: String,
-    /// ELO for 1v1 and 2v2 (in this order), each for the factions in [`Faction::ALL`]'s
+    /// ELO for 1v1 to 4v4 (in this order), each for the factions in [`Faction::ALL`]'s
     /// order. `None` where the player has no games.
-    pub ratings: [[Option<i64>; 4]; 2],
+    pub ratings: [[Option<i64>; 4]; 4],
 }
 
 /// Where a match stands, which decides whether the display shows it.

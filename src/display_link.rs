@@ -18,7 +18,7 @@ use crate::firmware::{self, BoardWifi, FirmwareState};
 use crate::i18n::Lang;
 use crate::maps;
 use crate::model::{Faction, MatchInfo, OwnStats, Phase, PlayerInfo};
-use crate::settings::{Brightness, Settings};
+use crate::settings::{Brightness, ModeSet, Settings};
 
 /// USB-Serial-JTAG of Espressif chips.
 const USB_ID: (u16, u16) = (0x303A, 0x1001);
@@ -192,17 +192,20 @@ pub fn frame_for(info: Option<&MatchInfo>, own: Option<&OwnStats>, settings: &Se
             encode(info, settings.show_own_team, lang, settings.brightness)
         }
         // In the menu: the player's own ratings stand in for the idle screen.
-        (_, Some(own)) if settings.own_stats => encode_own(own, settings.brightness),
+        (_, Some(own)) if !settings.own_ratings.is_empty() => {
+            encode_own(own, settings.own_ratings, settings.brightness)
+        }
         _ => IDLE_FRAME.to_string(),
     }
 }
 
 /// Encodes the player's own ratings as one protocol frame.
-pub fn encode_own(own: &OwnStats, brightness: Brightness) -> String {
+pub fn encode_own(own: &OwnStats, modes: ModeSet, brightness: Brightness) -> String {
     let mut frame = format!("S\t{}\nB\t{}\n", sanitize(&own.name), brightness.level());
-    for (mode, ratings) in ["1v1", "2v2"].iter().zip(&own.ratings) {
-        let _ = write!(frame, "R\t{mode}");
-        for rating in ratings {
+    // One line, and on the display one page, per chosen mode.
+    for mode in modes.iter() {
+        let _ = write!(frame, "R\t{}", ModeSet::NAMES[mode]);
+        for rating in &own.ratings[mode] {
             let _ = match rating {
                 Some(rating) => write!(frame, "\t{rating}"),
                 None => write!(frame, "\t-"),
@@ -678,7 +681,12 @@ mod tests {
     fn own() -> OwnStats {
         OwnStats {
             name: "Nullgerät".to_string(),
-            ratings: [[Some(1207), None, None, None], [Some(1408), None, None, Some(1369)]],
+            ratings: [
+                [Some(1207), None, None, None],
+                [Some(1408), None, None, Some(1369)],
+                [None; 4],
+                [Some(1250), Some(1100), None, Some(1310)],
+            ],
         }
     }
 
@@ -699,13 +707,20 @@ mod tests {
         info.phase = Phase::Over;
         assert_eq!(frame_for(Some(&info), Some(&own()), &settings, Lang::En), stats);
 
-        let off = Settings { own_stats: false, ..settings };
+        // The modes are the user's choice, in their natural order.
+        let big_teams = Settings { own_ratings: ModeSet::new(&[3, 2]), ..settings };
+        assert_eq!(
+            frame_for(None, Some(&own()), &big_teams, Lang::En),
+            "S\tNullgerät\nB\t2\nR\t3v3\t-\t-\t-\t-\nR\t4v4\t1250\t1100\t-\t1310\nE\n"
+        );
+        // No mode chosen: the display idles in the menu.
+        let off = Settings { own_ratings: ModeSet::new(&[]), ..settings };
         assert_eq!(frame_for(None, Some(&own()), &off, Lang::En), "I\n");
     }
 
     #[test]
     fn firmware_parser_understands_own_ratings() {
-        let frame = encode_own(&own(), Brightness::High);
+        let frame = encode_own(&own(), ModeSet::new(&[0, 1, 3]), Brightness::High);
         let mut parser = device::Parser::new();
         let parsed = frame.lines().find_map(|line| parser.feed_line(line));
         let Some(device::Frame::Stats(parsed)) = parsed else {
@@ -717,7 +732,19 @@ mod tests {
         let mut parser = device::Parser::new();
         let old = ["S\tNullgerät", "R\t1v1\t1207\t-\t-\t-", "E"].into_iter().find_map(|line| parser.feed_line(line));
         assert!(matches!(old, Some(device::Frame::Stats(old)) if old.brightness == 1));
-        assert_eq!(parsed.ratings, [[Some(1207), None, None, None], [Some(1408), None, None, Some(1369)]]);
+        // One page per line, each knowing its team size.
+        assert_eq!(
+            parsed.pages.as_slice(),
+            [
+                (1, [Some(1207), None, None, None]),
+                (2, [Some(1408), None, None, Some(1369)]),
+                (4, [Some(1250), Some(1100), None, Some(1310)]),
+            ]
+        );
+        let single = encode_own(&own(), ModeSet::new(&[2]), Brightness::Normal);
+        let mut parser = device::Parser::new();
+        let parsed = single.lines().find_map(|line| parser.feed_line(line));
+        assert!(matches!(parsed, Some(device::Frame::Stats(stats)) if stats.pages.as_slice() == [(3, [None; 4])]));
 
         // In a datagram the frame follows an idle line, which is all that older firmware
         // understands of it; this firmware takes the ratings.

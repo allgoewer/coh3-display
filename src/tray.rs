@@ -107,6 +107,15 @@ impl App {
                     self.actions.insert(id.clone(), Action::Toggle(*toggle));
                     menu.append(&CheckMenuItem::with_id(id, label, true, *checked, None))
                 }
+                Entry::Group { label, checks } => {
+                    let submenu = Submenu::new(label, true);
+                    for (option, (label, checked, toggle)) in checks.iter().enumerate() {
+                        let id = MenuId::new(format!("{index}.{option}"));
+                        self.actions.insert(id.clone(), Action::Toggle(*toggle));
+                        let _ = submenu.append(&CheckMenuItem::with_id(id, label, true, *checked, None));
+                    }
+                    menu.append(&submenu)
+                }
                 Entry::Brightness { label, options, current } => {
                     let submenu = Submenu::new(label, true);
                     for (option, (label, brightness)) in options.iter().enumerate() {
@@ -238,7 +247,7 @@ impl App {
             Toggle::ShowOwnTeam => settings.show_own_team = !settings.show_own_team,
             Toggle::AutoUpdateFirmware => settings.auto_update_firmware = !settings.auto_update_firmware,
             Toggle::KeepLastMatch => settings.keep_last_match = !settings.keep_last_match,
-            Toggle::OwnStats => settings.own_stats = !settings.own_stats,
+            Toggle::OwnRating(mode) => settings.own_ratings.toggle(mode),
             Toggle::Autostart => {}
         };
         if toggle == Toggle::Autostart {
@@ -257,7 +266,7 @@ impl App {
             Toggle::ShowOwnTeam => self.ctx.saved.show_own_team = effective.show_own_team,
             Toggle::AutoUpdateFirmware => self.ctx.saved.auto_update_firmware = effective.auto_update_firmware,
             Toggle::KeepLastMatch => self.ctx.saved.keep_last_match = effective.keep_last_match,
-            Toggle::OwnStats => self.ctx.saved.own_stats = effective.own_stats,
+            Toggle::OwnRating(_) => self.ctx.saved.own_ratings = effective.own_ratings,
             Toggle::Autostart => {}
         }
         self.save_settings();

@@ -29,6 +29,52 @@ impl Brightness {
     }
 }
 
+/// A choice among the modes 1v1 to 4v4. In the file it is a list like `["1v1", "2v2"]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "Vec<String>", into = "Vec<String>")]
+pub struct ModeSet([bool; 4]);
+
+impl ModeSet {
+    pub const NAMES: [&'static str; 4] = ["1v1", "2v2", "3v3", "4v4"];
+
+    /// The chosen modes by index: 0 for 1v1 up to 3 for 4v4.
+    pub fn new(chosen: &[usize]) -> Self {
+        ModeSet(std::array::from_fn(|index| chosen.contains(&index)))
+    }
+
+    pub fn contains(self, index: usize) -> bool {
+        self.0.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn toggle(&mut self, index: usize) {
+        if let Some(chosen) = self.0.get_mut(index) {
+            *chosen = !*chosen;
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == [false; 4]
+    }
+
+    /// The chosen modes' indexes, in order.
+    pub fn iter(self) -> impl Iterator<Item = usize> {
+        (0..4).filter(move |&index| self.0[index])
+    }
+}
+
+impl From<Vec<String>> for ModeSet {
+    /// Names that are not a mode are left out, so a file from a newer version still loads.
+    fn from(names: Vec<String>) -> Self {
+        ModeSet(Self::NAMES.map(|name| names.iter().any(|chosen| chosen == name)))
+    }
+}
+
+impl From<ModeSet> for Vec<String> {
+    fn from(modes: ModeSet) -> Self {
+        modes.iter().map(|index| ModeSet::NAMES[index].to_string()).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -44,9 +90,10 @@ pub struct Settings {
     /// Keep the last match on the display after it is over. For trying things out without
     /// a game running; costs OLED lifetime.
     pub keep_last_match: bool,
-    /// While the game is open but no match is on, show the player's own 1v1 and 2v2 ratings
-    /// instead of the idle screen.
-    pub own_stats: bool,
+    /// While the game is open but no match is on, show the player's own ratings for these
+    /// modes instead of the idle screen; none of them switches that off. (Until 1.3 this was
+    /// the switch `own_stats`, which is no longer read.)
+    pub own_ratings: ModeSet,
     /// How bright the display shows a match.
     pub brightness: Brightness,
 }
@@ -59,7 +106,7 @@ impl Default for Settings {
             show_own_team: false,
             auto_update_firmware: true,
             keep_last_match: false,
-            own_stats: true,
+            own_ratings: ModeSet::new(&[0, 1]),
             brightness: Brightness::Normal,
         }
     }
@@ -101,11 +148,13 @@ mod tests {
             show_own_team: true,
             auto_update_firmware: false,
             keep_last_match: true,
-            own_stats: false,
+            own_ratings: ModeSet::new(&[1, 3]),
             brightness: Brightness::Low,
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
+        // The modes are a list of names in the file.
+        assert!(fs::read_to_string(&path).unwrap().contains(r#"own_ratings = ["2v2", "4v4"]"#));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -125,5 +174,20 @@ mod tests {
         let settings: Settings = toml::from_str("wifi = false\nfuture_option = 3\n").unwrap();
         // A settings file from before a setting existed gets that setting's default.
         assert_eq!(settings, Settings { wifi: false, ..Settings::default() });
+    }
+
+    #[test]
+    fn reads_the_chosen_modes() {
+        let modes = |text: &str| toml::from_str::<Settings>(text).unwrap().own_ratings;
+        assert_eq!(modes(""), ModeSet::new(&[0, 1]));
+        assert_eq!(modes(r#"own_ratings = ["3v3"]"#), ModeSet::new(&[2]));
+        assert!(modes("own_ratings = []").is_empty());
+        // A mode this version does not know is left out.
+        assert_eq!(modes(r#"own_ratings = ["1v1", "5v5"]"#), ModeSet::new(&[0]));
+        assert_eq!(ModeSet::new(&[3, 0]).iter().collect::<Vec<_>>(), [0, 3]);
+
+        // The switch of 1.3 is ignored; everything else in such a file still counts.
+        let old: Settings = toml::from_str("usb = false\nown_stats = false\n").unwrap();
+        assert_eq!(old, Settings { usb: false, ..Settings::default() });
     }
 }

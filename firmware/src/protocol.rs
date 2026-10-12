@@ -46,8 +46,9 @@ pub struct OwnStats {
     pub name: String<48>,
     /// How bright to show them, as for a match. A frame that does not say gets 1 (low).
     pub brightness: u8,
-    /// 1v1 and 2v2, each for the factions A, B, D, G; `None` where there are no games.
-    pub ratings: [[Option<u16>; 4]; 2],
+    /// One page per mode the host sent: the team size (1 for 1v1, up to 4), and the rating
+    /// for each of the factions A, B, D, G; `None` where there are no games.
+    pub pages: Vec<(u8, [Option<u16>; 4]), 4>,
 }
 
 /// What the host can ask the screen to show.
@@ -103,19 +104,24 @@ impl Parser {
             "S" => {
                 self.pending = None;
                 self.pending_stats =
-                    Some(OwnStats { name: fit(fields.next().unwrap_or("")), brightness: 1, ratings: [[None; 4]; 2] });
+                    Some(OwnStats { name: fit(fields.next().unwrap_or("")), brightness: 1, pages: Vec::new() });
                 None
             }
             "R" => {
-                let row = match fields.next() {
-                    Some("1v1") => 0,
-                    Some("2v2") => 1,
+                let team_size = match fields.next() {
+                    Some("1v1") => 1,
+                    Some("2v2") => 2,
+                    Some("3v3") => 3,
+                    Some("4v4") => 4,
                     _ => return None,
                 };
                 if let Some(stats) = &mut self.pending_stats {
-                    for rating in &mut stats.ratings[row] {
+                    let mut ratings = [None; 4];
+                    for rating in &mut ratings {
                         *rating = fields.next().and_then(|rating| rating.parse().ok());
                     }
+                    // More lines than there are modes: the rest is dropped.
+                    let _ = stats.pages.push((team_size, ratings));
                 }
                 None
             }
@@ -149,7 +155,9 @@ impl Parser {
                 None
             }
             "E" => {
-                let stats = self.pending_stats.take().map(Frame::Stats);
+                // Ratings without a single mode are nothing to show.
+                let stats = self.pending_stats.take();
+                let stats = stats.map(|stats| if stats.pages.is_empty() { Frame::Idle } else { Frame::Stats(stats) });
                 self.pending.take().map(Frame::Match).or(stats)
             }
             "I" => {
