@@ -1,6 +1,9 @@
 use core::fmt::Write;
 use core::sync::atomic::Ordering;
 
+use display_protocol::board::WifiState;
+use display_protocol::frame::NORMAL_BRIGHTNESS;
+use display_protocol::{Frame, Match, OwnStats, Player};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_graphics::mono_font::iso_8859_1::{FONT_7X13_BOLD, FONT_9X18_BOLD};
@@ -16,8 +19,7 @@ use heapless::String;
 use ssd1306::prelude::*;
 use ssd1306::{I2CDisplayInterface, Ssd1306Async};
 
-use crate::net::{WifiState, wifi_state};
-use crate::protocol::{Frame, Match, NORMAL_BRIGHTNESS, OwnStats, Player};
+use crate::net::wifi_state;
 use crate::{DISPLAY_READY, FRAME};
 
 const WIDTH: i32 = 128;
@@ -314,7 +316,8 @@ fn draw_status<D: DrawTarget<Color = BinaryColor>>(target: &mut D) {
         WifiState::Unset => write!(wifi, "WiFi not set up"),
         WifiState::Off => write!(wifi, "WiFi off"),
         WifiState::Connecting => write!(wifi, "WiFi connecting"),
-        WifiState::Up([a, b, c, d]) => write!(wifi, "{a}.{b}.{c}.{d}"),
+        WifiState::Up(Some(ip)) => write!(wifi, "{ip}"),
+        WifiState::Up(None) => write!(wifi, "WiFi up"),
     };
     text(target, &wifi, Point::new(0, HEADER_HEIGHT + 28), &FONT_7X13_BOLD);
 }

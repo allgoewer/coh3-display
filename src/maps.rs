@@ -69,7 +69,7 @@ mod tests {
         for (id, english, german) in rows() {
             assert!(!english.is_empty(), "{id} has no title");
             for title in [english, german] {
-                assert!(title.chars().count() <= crate::display_link::MAX_MAP, "{title} is too long");
+                assert!(title.chars().count() <= display_protocol::frame::MAX_MAP, "{title} is too long");
                 assert!(title.chars().all(|c| (c as u32) <= 0xFF && !c.is_control()), "{title} is not Latin-1");
             }
         }

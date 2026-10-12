@@ -358,6 +358,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "display-protocol"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+]
+
+[[package]]
 name = "docsplay"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1117,6 +1124,7 @@ name = "firmware"
 version = "1.4.0"
 dependencies = [
  "critical-section",
+ "display-protocol",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",

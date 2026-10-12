@@ -3,6 +3,8 @@
 use core::cell::Cell;
 use core::fmt::Write;
 
+use display_protocol::board::WifiState;
+use display_protocol::udp::{BEACON_PORT, Beacon, FRAME_PORT, is_probe, parse_datagram};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
@@ -18,31 +20,14 @@ use heapless::String;
 use static_cell::StaticCell;
 
 use crate::credentials::Credentials;
-use crate::protocol::parse_datagram;
 use crate::{FRAME, frame_reply};
 
-/// The display broadcasts its beacon to this port.
-pub const BEACON_PORT: u16 = 42424;
-/// The display receives frames on this port.
-pub const FRAME_PORT: u16 = 42425;
-/// A datagram starting with this asks the display to send its beacon straight back.
-const PROBE: &[u8] = b"COH3DISPLAY?";
 const BEACON_INTERVAL: Duration = Duration::from_secs(2);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WifiState {
-    /// No credentials stored yet.
-    Unset,
-    /// The stored credentials are unusable or the radio did not start.
-    Off,
-    Connecting,
-    /// Connected, with the address DHCP handed out.
-    Up([u8; 4]),
-}
-
 static STATE: Mutex<CriticalSectionRawMutex, Cell<WifiState>> = Mutex::new(Cell::new(WifiState::Unset));
 
+/// How the WiFi is doing, for the status screen and the answer to a status request.
 pub fn wifi_state() -> WifiState {
     STATE.lock(Cell::get)
 }
@@ -114,11 +99,7 @@ async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
 #[embassy_executor::task]
 async fn udp_task(stack: Stack<'static>, mac: [u8; 6]) {
     let mut beacon: String<40> = String::new();
-    let _ = write!(beacon, "COH3DISPLAY 1 ");
-    for byte in mac {
-        let _ = write!(beacon, "{byte:02x}");
-    }
-    let _ = beacon.push('\n');
+    let _ = write!(beacon, "{}", Beacon(mac));
     let broadcast = IpEndpoint::new(IpAddress::v4(255, 255, 255, 255), BEACON_PORT);
 
     let mut rx_meta = [PacketMetadata::EMPTY; 4];
@@ -130,7 +111,7 @@ async fn udp_task(stack: Stack<'static>, mac: [u8; 6]) {
     loop {
         stack.wait_config_up().await;
         if let Some(config) = stack.config_v4() {
-            set_state(WifiState::Up(config.address.address().octets()));
+            set_state(WifiState::Up(Some(config.address.address())));
         }
 
         let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx_buffer, &mut tx_meta, &mut tx_buffer);
@@ -139,7 +120,7 @@ async fn udp_task(stack: Stack<'static>, mac: [u8; 6]) {
             loop {
                 match select3(socket.recv_from(&mut datagram), ticker.next(), stack.wait_config_down()).await {
                     Either3::First(Ok((len, sender))) => {
-                        if datagram[..len].starts_with(PROBE) {
+                        if is_probe(&datagram[..len]) {
                             let _ = socket.send_to(beacon.as_bytes(), sender).await;
                         } else if let Some(frame) = parse_datagram(&datagram[..len]) {
                             FRAME.signal(frame);

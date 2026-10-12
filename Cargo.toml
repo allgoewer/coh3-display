@@ -3,10 +3,16 @@ name = "coh3-display"
 version = "1.3.2"
 edition = "2024"
 
+# The firmware is a project of its own, with its own target and lock file.
+[workspace]
+members = ["protocol"]
+exclude = ["firmware"]
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "7"
+display-protocol = { path = "protocol" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serialport = "4"
 serde ={ version = "1", features = ["derive"] }

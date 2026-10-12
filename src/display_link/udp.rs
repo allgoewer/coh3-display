@@ -6,40 +6,19 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, datagram, encode, frame_for};
+use display_protocol::Reply;
+use display_protocol::udp::{BEACON_PORT, Datagram, FRAME_PORT, PROBE, parse_beacon};
+
+use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, frame_for, match_frame};
 use crate::applog::log;
 use crate::i18n::Lang;
 use crate::model::MatchInfo;
 use crate::settings::Brightness;
 
-/// Displays broadcast their beacon to this port.
-pub const BEACON_PORT: u16 = 42424;
-/// Displays receive frames on this port.
-pub const FRAME_PORT: u16 = 42425;
-const BEACON_PREFIX: &str = "COH3DISPLAY 1 ";
-/// Broadcast by the PC; a display answers it with its beacon, sent straight back. Unlike the
-/// display's own broadcast, that answer gets through a firewall that blocks unsolicited traffic.
-const PROBE: &[u8] = b"COH3DISPLAY? 1\n";
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 /// A display that stopped sending beacons for this long is forgotten.
 const STALE: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(200);
-
-/// Returns the display's ID (its MAC address) if `data` is a beacon.
-pub fn parse_beacon(data: &[u8]) -> Option<&str> {
-    let id = std::str::from_utf8(data).ok()?.trim_end().strip_prefix(BEACON_PREFIX)?;
-    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
-}
-
-fn parse_ack(data: &[u8]) -> Option<Ack> {
-    if data.starts_with(b"OK") {
-        Some(Ack::Shown)
-    } else if data.starts_with(b"ERR") {
-        Some(Ack::NoOled)
-    } else {
-        None
-    }
-}
 
 struct Device {
     last_seen: Instant,
@@ -102,9 +81,9 @@ fn receive(socket: &UdpSocket, devices: &mut HashMap<IpAddr, Device>) -> io::Res
                 Device::new(false)
             });
             device.last_seen = Instant::now();
-        } else if let (Some(ack), Some(device)) = (parse_ack(data), devices.get_mut(&sender.ip())) {
+        } else if let (Some(ack), Some(device)) = (Reply::parse(data), devices.get_mut(&sender.ip())) {
             device.awaiting_ack = false;
-            device.report(sender.ip(), ack);
+            device.report(sender.ip(), ack.into());
         }
     }
     Ok(found_new)
@@ -166,7 +145,7 @@ fn serve(socket: &UdpSocket, fixed: Option<IpAddr>, ctx: &mut LinkContext) -> io
         if changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND) {
             let own = ctx.own.borrow_and_update().clone();
             let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), own.as_ref(), &settings, ctx.lang);
-            send(socket, &mut devices, &datagram(&frame));
+            send(socket, &mut devices, &Datagram(&frame).to_string());
             last_sent = Some(Instant::now());
         }
         publish(ctx, &devices);
@@ -229,7 +208,7 @@ pub fn send_once(
         receive(&socket, &mut devices)?;
     }
 
-    let frame = encode(info, show_own_team, lang, brightness);
+    let frame = match_frame(info, show_own_team, lang, brightness).to_string();
     let mut answers = Vec::new();
     for addr in devices.keys() {
         socket.send_to(frame.as_bytes(), SocketAddr::new(*addr, FRAME_PORT))?;
@@ -238,9 +217,9 @@ pub fn send_once(
     let mut buf = [0u8; 64];
     while answers.len() < devices.len() && Instant::now() < deadline {
         if let Ok((len, sender)) = socket.recv_from(&mut buf) {
-            if let Some(ack) = parse_ack(&buf[..len]) {
+            if let Some(ack) = Reply::parse(&buf[..len]) {
                 if devices.contains_key(&sender.ip()) && !answers.iter().any(|(addr, _)| *addr == sender.ip()) {
-                    answers.push((sender.ip(), ack));
+                    answers.push((sender.ip(), ack.into()));
                 }
             }
         }
@@ -251,24 +230,4 @@ pub fn send_once(
         }
     }
     Ok(answers)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recognises_beacons() {
-        assert_eq!(parse_beacon(b"COH3DISPLAY 1 f0f5bd2d1b88\n"), Some("f0f5bd2d1b88"));
-        assert_eq!(parse_beacon(b"COH3DISPLAY 1 \n"), None);
-        assert_eq!(parse_beacon(b"COH3DISPLAY 2 f0f5bd2d1b88\n"), None);
-        assert_eq!(parse_beacon(b"OK\n"), None);
-    }
-
-    #[test]
-    fn recognises_acks() {
-        assert_eq!(parse_ack(b"OK\n"), Some(Ack::Shown));
-        assert_eq!(parse_ack(b"ERR display\n"), Some(Ack::NoOled));
-        assert_eq!(parse_ack(b"COH3DISPLAY 1 f0f5bd2d1b88\n"), None);
-    }
 }

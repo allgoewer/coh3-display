@@ -38,7 +38,7 @@ jobs:
           if (-not $installed) { choco install innosetup -y --no-progress }
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
       # Firmware, then the app that embeds it, then the installer.
       - name: Build

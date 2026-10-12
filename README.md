@@ -30,7 +30,7 @@ Needs Rust (stable, with the `riscv32imac-unknown-none-elf` target; the toolchai
 it in) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```powershell
-cargo test                 # the app's tests
+cargo test --workspace     # the tests of the app and of the protocol it shares with the firmware
 installer\build.ps1        # firmware, app and target\installer\coh3-display-<version>-setup.exe
 ```
 

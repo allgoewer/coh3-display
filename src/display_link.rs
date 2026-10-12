@@ -3,13 +3,13 @@
 
 pub mod udp;
 
-use std::fmt::Write as _;
 use std::io;
 use std::net::IpAddr;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use display_protocol::frame::{self, Frame, MAX_MAP, MAX_NAME, MAX_PLAYERS, Reply, display_text};
 use serialport::{SerialPort, SerialPortType};
 use tokio::sync::watch;
 
@@ -22,10 +22,6 @@ use crate::settings::{Brightness, ModeSet, Settings};
 
 /// USB-Serial-JTAG of Espressif chips.
 const USB_ID: (u16, u16) = (0x303A, 0x1001);
-const MAX_PLAYERS: usize = 8;
-const MAX_TEXT: usize = 24;
-/// Map titles get more room: the longest is "Überquerung des Rapido-Flusses".
-pub const MAX_MAP: usize = 32;
 const RESEND: Duration = Duration::from_secs(5);
 const RETRY: Duration = Duration::from_secs(2);
 /// How often a link that is switched off checks whether it was switched on again.
@@ -114,15 +110,6 @@ enum Stop {
     Install,
 }
 
-/// Cuts text down to what the display can show: no control characters, Latin-1 only.
-fn sanitize(text: &str) -> String {
-    sanitize_to(text, MAX_TEXT)
-}
-
-fn sanitize_to(text: &str, max: usize) -> String {
-    text.chars().filter(|c| !c.is_control()).map(|c| if (c as u32) <= 0xFF { c } else { '?' }).take(max).collect()
-}
-
 /// `alamein_4p` -> `alamein`
 pub fn short_map(map: &str) -> &str {
     match map.rsplit_once('_') {
@@ -158,70 +145,53 @@ pub fn shown_players(info: &MatchInfo, show_own_team: bool) -> Vec<&PlayerInfo> 
     players
 }
 
-/// Encodes a match as one protocol frame.
-pub fn encode(info: &MatchInfo, show_own_team: bool, lang: Lang, brightness: Brightness) -> String {
-    let map = sanitize_to(&maps::title(&info.map, lang), MAX_MAP);
-    let mut frame = format!("M\t{}\t{map}\nB\t{}\n", sanitize(&info.mode), brightness.level());
-
-    for player in shown_players(info, show_own_team).into_iter().take(MAX_PLAYERS) {
-        let stats = match &player.stats {
-            Some(stats) => format!("{}\t{}\t{}\t{}", stats.rating, stats.wins, stats.losses, stats.streak),
-            None => "-\t-\t-\t-".to_string(),
-        };
-        let country = player.country.as_deref().map(sanitize).filter(|c| !c.is_empty());
-        let _ = writeln!(
-            frame,
-            "P\t{}\t{stats}\t{}\t{}",
-            faction_code(player),
-            country.as_deref().unwrap_or("-"),
-            sanitize(&player.name)
-        );
+/// A player as the display is told about them.
+fn wire_player(player: &PlayerInfo) -> frame::Player {
+    let stats = player.stats.as_ref();
+    frame::Player {
+        faction: faction_code(player),
+        // A rating the protocol has no room for is as good as none.
+        elo: stats.and_then(|stats| u16::try_from(stats.rating).ok()),
+        wins: stats.map(|stats| stats.wins),
+        losses: stats.map(|stats| stats.losses),
+        streak: stats.map(|stats| stats.streak),
+        country: display_text(player.country.as_deref().unwrap_or(""), MAX_NAME),
+        name: display_text(&player.name, MAX_NAME),
     }
-    frame.push_str("E\n");
-    frame
 }
 
-/// The line that sends the display into its idle mode.
-pub const IDLE_FRAME: &str = "I\n";
+/// A match as one protocol frame.
+pub fn match_frame(info: &MatchInfo, show_own_team: bool, lang: Lang, brightness: Brightness) -> Frame {
+    Frame::Match(frame::Match {
+        mode: display_text(&info.mode, MAX_NAME),
+        map: display_text(&maps::title(&info.map, lang), MAX_MAP),
+        brightness: brightness.level(),
+        players: shown_players(info, show_own_team).into_iter().take(MAX_PLAYERS).map(wire_player).collect(),
+    })
+}
 
 /// What the display should be told right now: the match while it is worth showing,
 /// otherwise to go idle.
-pub fn frame_for(info: Option<&MatchInfo>, own: Option<&OwnStats>, settings: &Settings, lang: Lang) -> String {
+pub fn frame_for(info: Option<&MatchInfo>, own: Option<&OwnStats>, settings: &Settings, lang: Lang) -> Frame {
     match (info, own) {
         (Some(info), _) if info.phase != Phase::Over || settings.keep_last_match => {
-            encode(info, settings.show_own_team, lang, settings.brightness)
+            match_frame(info, settings.show_own_team, lang, settings.brightness)
         }
         // In the menu: the player's own ratings stand in for the idle screen.
-        (_, Some(own)) if !settings.own_ratings.is_empty() => {
-            encode_own(own, settings.own_ratings, settings.brightness)
-        }
-        _ => IDLE_FRAME.to_string(),
+        (_, Some(own)) if !settings.own_ratings.is_empty() => own_frame(own, settings.own_ratings, settings.brightness),
+        _ => Frame::Idle,
     }
 }
 
-/// Encodes the player's own ratings as one protocol frame.
-pub fn encode_own(own: &OwnStats, modes: ModeSet, brightness: Brightness) -> String {
-    let mut frame = format!("S\t{}\nB\t{}\n", sanitize(&own.name), brightness.level());
-    // One line, and on the display one page, per chosen mode.
-    for mode in modes.iter() {
-        let _ = write!(frame, "R\t{}", ModeSet::NAMES[mode]);
-        for rating in &own.ratings[mode] {
-            let _ = match rating {
-                Some(rating) => write!(frame, "\t{rating}"),
-                None => write!(frame, "\t-"),
-            };
-        }
-        frame.push('\n');
-    }
-    frame.push_str("E\n");
-    frame
-}
-
-/// A frame as it goes into a UDP datagram, where the display's firmware is not known. One
-/// from before 1.3.0 does not know the ratings frame and would not answer it, so an idle
-/// line goes in front: old firmware goes idle on it, new firmware takes the last frame.
-pub fn datagram(frame: &str) -> String {
-    if frame.starts_with("S\t") { format!("{IDLE_FRAME}{frame}") } else { frame.to_string() }
+/// The player's own ratings as one protocol frame.
+pub fn own_frame(own: &OwnStats, modes: ModeSet, brightness: Brightness) -> Frame {
+    // One page on the display per chosen mode, which it knows by its team size.
+    let page = |mode: usize| (mode as u8 + 1, own.ratings[mode].map(|rating| u16::try_from(rating?).ok()));
+    Frame::Stats(frame::OwnStats {
+        name: display_text(&own.name, MAX_NAME),
+        brightness: brightness.level(),
+        pages: modes.iter().map(page).collect(),
+    })
 }
 
 /// The first connected ESP USB serial port, if any.
@@ -252,6 +222,15 @@ pub enum Ack {
     Silent,
 }
 
+impl From<Reply> for Ack {
+    fn from(reply: Reply) -> Self {
+        match reply {
+            Reply::Shown => Ack::Shown,
+            Reply::NoOled => Ack::NoOled,
+        }
+    }
+}
+
 impl Ack {
     pub fn describe(self) -> &'static str {
         match self {
@@ -263,8 +242,8 @@ impl Ack {
 }
 
 /// Writes a frame and waits briefly for the device's answer.
-fn send_frame(port: &mut dyn SerialPort, frame: &str) -> io::Result<Ack> {
-    port.write_all(frame.as_bytes())?;
+fn send_frame(port: &mut dyn SerialPort, frame: &Frame) -> io::Result<Ack> {
+    port.write_all(frame.to_string().as_bytes())?;
     port.flush()?;
 
     let deadline = Instant::now() + Duration::from_millis(800);
@@ -274,11 +253,8 @@ fn send_frame(port: &mut dyn SerialPort, frame: &str) -> io::Result<Ack> {
         match port.read(&mut buf) {
             Ok(n) => {
                 reply.extend_from_slice(&buf[..n]);
-                if reply.windows(3).any(|w| w == b"OK\n") {
-                    return Ok(Ack::Shown);
-                }
-                if reply.windows(4).any(|w| w == b"ERR ") {
-                    return Ok(Ack::NoOled);
+                if let Some(reply) = Reply::find(&reply) {
+                    return Ok(reply.into());
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
@@ -301,7 +277,7 @@ pub fn send_once(
         None => detect_port().ok_or_else(|| anyhow::anyhow!("none found"))?,
     };
     let mut port = open(&port_name)?;
-    Ok(send_frame(port.as_mut(), &encode(info, show_own_team, lang, brightness))?)
+    Ok(send_frame(port.as_mut(), &match_frame(info, show_own_team, lang, brightness))?)
 }
 
 fn publish_usb(ctx: &LinkContext, link: Option<UsbLink>) {
@@ -496,6 +472,9 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
+    use display_protocol::Parser;
+    use display_protocol::frame::MAX_LINE;
+
     use super::*;
     use crate::model::PlayerStats;
 
@@ -526,19 +505,33 @@ mod tests {
         }
     }
 
+    /// The frame as it goes over the wire.
+    fn encode(info: &MatchInfo, show_own_team: bool, lang: Lang, brightness: Brightness) -> String {
+        match_frame(info, show_own_team, lang, brightness).to_string()
+    }
+
+    /// What the display makes of the frame once it has travelled as text.
+    fn received(frame: &Frame) -> Option<Frame> {
+        let mut parser = Parser::new();
+        let text = frame.to_string();
+        assert!(text.lines().all(|line| line.len() <= MAX_LINE));
+        text.lines().find_map(|line| parser.feed_line(line))
+    }
+
     #[test]
     fn sends_idle_instead_of_a_match_that_is_over() {
         let settings = Settings::default();
         let mut info = two_v_two();
-        assert_eq!(frame_for(None, None, &settings, Lang::En), "I\n");
-        assert!(frame_for(Some(&info), None, &settings, Lang::En).starts_with("M\t2v2\tEl Alamein\n"));
+        let frame = |info: Option<&MatchInfo>, settings: &Settings| frame_for(info, None, settings, Lang::En);
+        assert_eq!(frame(None, &settings).to_string(), "I\n");
+        assert!(frame(Some(&info), &settings).to_string().starts_with("M\t2v2\tEl Alamein\n"));
         info.phase = Phase::Lingering;
-        assert!(frame_for(Some(&info), None, &settings, Lang::En).starts_with("M\t"));
+        assert!(matches!(frame(Some(&info), &settings), Frame::Match(_)));
         info.phase = Phase::Over;
-        assert_eq!(frame_for(Some(&info), None, &settings, Lang::En), "I\n");
+        assert_eq!(frame(Some(&info), &settings), Frame::Idle);
 
         let keep = Settings { keep_last_match: true, ..settings };
-        assert!(frame_for(Some(&info), None, &keep, Lang::En).starts_with("M\t"));
+        assert!(matches!(frame(Some(&info), &keep), Frame::Match(_)));
     }
 
     fn two_v_two() -> MatchInfo {
@@ -597,16 +590,11 @@ mod tests {
     fn sends_the_maps_title_in_the_apps_language() {
         let rapido = MatchInfo { map: "rapido_river_8p".to_string(), ..two_v_two() };
         assert!(encode(&rapido, false, Lang::En, Brightness::Normal).starts_with("M\t2v2\tRapido River Crossing\n"));
-        let frame = encode(&rapido, false, Lang::De, Brightness::Normal);
-        assert!(frame.starts_with("M\t2v2\tÜberquerung des Rapido-Flusses\n"));
-
-        // The longest title there is, with a two-byte character, fits the firmware's field.
-        let mut parser = device::Parser::new();
-        let parsed = frame.lines().find_map(|line| parser.feed_line(line));
-        let Some(device::Frame::Match(parsed)) = parsed else {
-            panic!("frame ends with E, got {parsed:?}");
-        };
-        assert_eq!(parsed.map.as_str(), "Überquerung des Rapido-Flusses");
+        // The longest title there is, with a two-byte character, fits the protocol's field.
+        assert!(
+            encode(&rapido, false, Lang::De, Brightness::Normal)
+                .starts_with("M\t2v2\tÜberquerung des Rapido-Flusses\n")
+        );
 
         let unknown = MatchInfo { map: "some_new_map_6p".to_string(), ..two_v_two() };
         assert!(encode(&unknown, false, Lang::De, Brightness::Normal).starts_with("M\t2v2\tSome New Map\n"));
@@ -620,31 +608,13 @@ mod tests {
         assert_eq!(short_map("map_p"), "map_p");
     }
 
-    /// The firmware's parser, compiled into the host tests to keep both ends in step.
-    #[path = "../../../firmware/src/protocol.rs"]
-    #[allow(dead_code)]
-    mod device;
-
     #[test]
-    fn firmware_parser_understands_encoded_frames() {
-        let frame = encode(&two_v_two(), false, Lang::En, Brightness::Normal);
-
-        let mut parser = device::Parser::new();
-        let mut parsed = None;
-        for line in frame.lines() {
-            assert!(line.len() <= device::MAX_LINE);
-            parsed = parser.feed_line(line);
-        }
-        let Some(device::Frame::Match(parsed)) = parsed else {
-            panic!("frame ends with E, got {parsed:?}");
+    fn the_display_reads_the_match_as_it_was_sent() {
+        let frame = match_frame(&two_v_two(), false, Lang::En, Brightness::Normal);
+        assert_eq!(received(&frame).as_ref(), Some(&frame));
+        let Frame::Match(parsed) = frame else {
+            panic!("a match makes a match frame");
         };
-
-        // The idle line is a frame of its own, and it drops a half-sent match.
-        let mut parser = device::Parser::new();
-        assert_eq!(parser.feed_line("M\t2v2\talamein"), None);
-        assert_eq!(parser.feed_line(IDLE_FRAME.trim_end()), Some(device::Frame::Idle));
-        assert_eq!(parser.feed_line("E"), None);
-        assert_eq!(device::parse_datagram(IDLE_FRAME.as_bytes()), Some(device::Frame::Idle));
 
         assert_eq!((parsed.mode.as_str(), parsed.map.as_str()), ("2v2", "El Alamein"));
         assert_eq!(parsed.players.len(), 4);
@@ -659,23 +629,10 @@ mod tests {
 
     #[test]
     fn tells_the_display_how_bright_to_be() {
-        let parse = |frame: &str| {
-            let mut parser = device::Parser::new();
-            match frame.lines().find_map(|line| parser.feed_line(line)) {
-                Some(device::Frame::Match(parsed)) => parsed.brightness,
-                other => panic!("frame ends with E, got {other:?}"),
-            }
-        };
         for (brightness, level) in [(Brightness::Low, 1), (Brightness::Normal, 2), (Brightness::High, 3)] {
             let frame = encode(&two_v_two(), false, Lang::En, brightness);
             assert_eq!(frame.lines().nth(1), Some(format!("B\t{level}").as_str()));
-            assert_eq!(parse(&frame), level);
         }
-
-        // A frame from an older app has no such line, and nonsense is not taken at its word.
-        assert_eq!(parse("M\t2v2\tEl Alamein\nE"), 2);
-        assert_eq!(parse("M\t2v2\tEl Alamein\nB\tx\nE"), 2);
-        assert_eq!(parse("M\t2v2\tEl Alamein\nB\t9\nE"), 2);
     }
 
     fn own() -> OwnStats {
@@ -693,46 +650,44 @@ mod tests {
     #[test]
     fn shows_own_ratings_when_there_is_no_match_to_show() {
         let settings = Settings::default();
+        let frame = |info: Option<&MatchInfo>, settings: &Settings| {
+            frame_for(info, Some(&own()), settings, Lang::En).to_string()
+        };
         let stats = "S\tNullgerät\nB\t2\nR\t1v1\t1207\t-\t-\t-\nR\t2v2\t1408\t-\t-\t1369\nE\n";
-        assert_eq!(frame_for(None, Some(&own()), &settings, Lang::En), stats);
+        assert_eq!(frame(None, &settings), stats);
         // The ratings are as bright as a match is set to be.
         let bright = Settings { brightness: Brightness::High, ..settings };
-        assert!(frame_for(None, Some(&own()), &bright, Lang::En).starts_with("S\tNullgerät\nB\t3\n"));
+        assert!(frame(None, &bright).starts_with("S\tNullgerät\nB\t3\n"));
 
         // A match that is on, or only just over, comes first; a finished one does not.
         let mut info = two_v_two();
-        assert!(frame_for(Some(&info), Some(&own()), &settings, Lang::En).starts_with("M\t"));
+        assert!(frame(Some(&info), &settings).starts_with("M\t"));
         info.phase = Phase::Lingering;
-        assert!(frame_for(Some(&info), Some(&own()), &settings, Lang::En).starts_with("M\t"));
+        assert!(frame(Some(&info), &settings).starts_with("M\t"));
         info.phase = Phase::Over;
-        assert_eq!(frame_for(Some(&info), Some(&own()), &settings, Lang::En), stats);
+        assert_eq!(frame(Some(&info), &settings), stats);
 
         // The modes are the user's choice, in their natural order.
         let big_teams = Settings { own_ratings: ModeSet::new(&[3, 2]), ..settings };
         assert_eq!(
-            frame_for(None, Some(&own()), &big_teams, Lang::En),
+            frame(None, &big_teams),
             "S\tNullgerät\nB\t2\nR\t3v3\t-\t-\t-\t-\nR\t4v4\t1250\t1100\t-\t1310\nE\n"
         );
         // No mode chosen: the display idles in the menu.
         let off = Settings { own_ratings: ModeSet::new(&[]), ..settings };
-        assert_eq!(frame_for(None, Some(&own()), &off, Lang::En), "I\n");
+        assert_eq!(frame(None, &off), "I\n");
     }
 
     #[test]
-    fn firmware_parser_understands_own_ratings() {
-        let frame = encode_own(&own(), ModeSet::new(&[0, 1, 3]), Brightness::High);
-        let mut parser = device::Parser::new();
-        let parsed = frame.lines().find_map(|line| parser.feed_line(line));
-        let Some(device::Frame::Stats(parsed)) = parsed else {
-            panic!("frame ends with E, got {parsed:?}");
+    fn the_display_reads_own_ratings_as_they_were_sent() {
+        let frame = own_frame(&own(), ModeSet::new(&[0, 1, 3]), Brightness::High);
+        assert_eq!(received(&frame).as_ref(), Some(&frame));
+        let Frame::Stats(parsed) = frame else {
+            panic!("ratings make a ratings frame");
         };
         assert_eq!(parsed.name.as_str(), "Nullgerät");
         assert_eq!(parsed.brightness, 3);
-        // An app from before the ratings carried a brightness gets them dimmed, as it expects.
-        let mut parser = device::Parser::new();
-        let old = ["S\tNullgerät", "R\t1v1\t1207\t-\t-\t-", "E"].into_iter().find_map(|line| parser.feed_line(line));
-        assert!(matches!(old, Some(device::Frame::Stats(old)) if old.brightness == 1));
-        // One page per line, each knowing its team size.
+        // One page per mode, each knowing its team size.
         assert_eq!(
             parsed.pages.as_slice(),
             [
@@ -741,19 +696,8 @@ mod tests {
                 (4, [Some(1250), Some(1100), None, Some(1310)]),
             ]
         );
-        let single = encode_own(&own(), ModeSet::new(&[2]), Brightness::Normal);
-        let mut parser = device::Parser::new();
-        let parsed = single.lines().find_map(|line| parser.feed_line(line));
-        assert!(matches!(parsed, Some(device::Frame::Stats(stats)) if stats.pages.as_slice() == [(3, [None; 4])]));
-
-        // In a datagram the frame follows an idle line, which is all that older firmware
-        // understands of it; this firmware takes the ratings.
-        let packet = datagram(&frame);
-        assert!(packet.starts_with("I\nS\t"));
-        assert!(matches!(device::parse_datagram(packet.as_bytes()), Some(device::Frame::Stats(_))));
-        // A match goes out as it is.
-        let frame = encode(&two_v_two(), false, Lang::En, Brightness::Normal);
-        assert_eq!(datagram(&frame), frame);
+        let single = own_frame(&own(), ModeSet::new(&[2]), Brightness::Normal);
+        assert!(matches!(single, Frame::Stats(stats) if stats.pages.as_slice() == [(3, [None; 4])]));
     }
 
     #[test]

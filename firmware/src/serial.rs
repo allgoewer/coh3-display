@@ -1,5 +1,8 @@
 use core::fmt::Write as _;
 
+use display_protocol::Parser;
+use display_protocol::board::{Command, Status, WIFI_REFUSED, WIFI_STORED};
+use display_protocol::frame::MAX_LINE;
 use embassy_time::{Duration, Timer, with_timeout};
 use embedded_io_async::{Read, Write};
 use esp_hal::Async;
@@ -8,30 +11,21 @@ use esp_storage::FlashStorage;
 use heapless::{String, Vec};
 
 use crate::credentials::Credentials;
-use crate::net::{WifiState, wifi_state};
-use crate::protocol::{MAX_LINE, Parser};
+use crate::net::wifi_state;
 use crate::{FRAME, frame_reply, storage};
 
-/// `STATUS fw=0.2.0 wifi=up ip=192.168.1.23` — the answer to an `S` line.
+/// `STATUS fw=0.2.0 wifi=up ip=192.168.1.23` — the answer to a status request.
 fn status_line() -> String<64> {
     let mut status: String<64> = String::new();
-    let _ = write!(status, "STATUS fw={} ", env!("CARGO_PKG_VERSION"));
-    let _ = match wifi_state() {
-        WifiState::Off => writeln!(status, "wifi=off"),
-        WifiState::Unset => writeln!(status, "wifi=unset"),
-        WifiState::Connecting => writeln!(status, "wifi=connecting"),
-        WifiState::Up([a, b, c, d]) => writeln!(status, "wifi=up ip={a}.{b}.{c}.{d}"),
-    };
+    let _ = write!(status, "{}", Status { version: Some(env!("CARGO_PKG_VERSION")), wifi: wifi_state() });
     status
 }
 
-/// Handles `W <ssid> <password>`: stores the credentials (an empty SSID wipes them).
-/// Returns whether flash was written, in which case the board must restart to use them.
-fn store_wifi(flash: &mut FlashStorage<'_>, fields: &str) -> bool {
-    let mut fields = fields.split('\t');
-    let ssid = fields.next().unwrap_or("");
-    let password = fields.next().unwrap_or("");
-    if fields.next().is_some() {
+/// Stores the credentials of a `W` line (an empty SSID wipes them). Returns whether flash
+/// was written, in which case the board must restart to use them.
+fn store_wifi(flash: &mut FlashStorage<'_>, ssid: &str, password: &str) -> bool {
+    // A tab in the password is a field too many.
+    if password.contains('\t') {
         return false;
     }
     match Credentials::new(ssid, password) {
@@ -59,20 +53,21 @@ pub async fn serial_task(usb: UsbSerialJtag<'static, Async>, mut flash: FlashSto
             }
             let status;
             let mut restart = false;
-            let reply: Option<&[u8]> = match core::str::from_utf8(&line).map(|text| text.trim_end_matches('\r')) {
-                Ok("S") if !overflow => {
+            let text = core::str::from_utf8(&line).ok().filter(|_| !overflow).map(|text| text.trim_end_matches('\r'));
+            let reply: Option<&[u8]> = match text.map(|text| (Command::parse(text), text)) {
+                Some((Some(Command::Status), _)) => {
                     status = status_line();
                     Some(status.as_bytes())
                 }
-                Ok(text) if !overflow && (text == "W" || text.starts_with("W\t")) => {
-                    restart = store_wifi(&mut flash, text.get(2..).unwrap_or(""));
-                    Some(if restart { b"OK\n" } else { b"ERR wifi\n" })
+                Some((Some(Command::SetWifi { ssid, password }), _)) => {
+                    restart = store_wifi(&mut flash, ssid, password);
+                    Some(if restart { WIFI_STORED.as_bytes() } else { WIFI_REFUSED.as_bytes() })
                 }
-                Ok(text) if !overflow => parser.feed_line(text).map(|frame| {
+                Some((None, text)) => parser.feed_line(text).map(|frame| {
                     FRAME.signal(frame);
                     frame_reply()
                 }),
-                _ => None,
+                None => None,
             };
             line.clear();
             overflow = false;

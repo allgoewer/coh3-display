@@ -3,10 +3,10 @@
 
 use std::fmt;
 use std::io;
-use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use display_protocol::board::{Command, MAX_PASSWORD, MAX_SSID, MIN_PASSWORD, Status, WIFI_STORED};
 use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
 use espflash::flasher::{FlashData, FlashSettings, Flasher};
 use espflash::image_format::ImageFormat;
@@ -33,15 +33,8 @@ pub fn embedded() -> Option<Embedded> {
     None
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BoardWifi {
-    /// No credentials on the board.
-    Unset,
-    /// Credentials present but unusable, or the radio failed.
-    Off,
-    Connecting,
-    Up(Option<IpAddr>),
-}
+/// What a board says about its WiFi.
+pub use display_protocol::board::WifiState as BoardWifi;
 
 /// What a board said about itself in answer to `S`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,27 +46,8 @@ pub struct BoardStatus {
 
 /// Parses `STATUS fw=0.2.0 wifi=up ip=10.0.0.5`.
 pub fn parse_status(line: &str) -> Option<BoardStatus> {
-    let mut fields = line.trim().split(' ');
-    if fields.next()? != "STATUS" {
-        return None;
-    }
-    let (mut version, mut wifi, mut ip) = (None, None, None);
-    for field in fields {
-        match field.split_once('=')? {
-            ("fw", value) => version = Some(value.to_string()),
-            ("wifi", value) => wifi = Some(value),
-            ("ip", value) => ip = value.parse().ok(),
-            _ => {}
-        }
-    }
-    let wifi = match wifi? {
-        "unset" => BoardWifi::Unset,
-        "off" => BoardWifi::Off,
-        "connecting" => BoardWifi::Connecting,
-        "up" => BoardWifi::Up(ip),
-        _ => return None,
-    };
-    Some(BoardStatus { version, wifi })
+    let status = Status::parse(line)?;
+    Some(BoardStatus { version: status.version.map(str::to_string), wifi: status.wifi })
 }
 
 /// How the firmware on a board compares with the one in this exe.
@@ -127,7 +101,8 @@ fn read_line_with(port: &mut dyn SerialPort, prefix: &str, timeout: Duration) ->
 pub fn probe(port: &mut dyn SerialPort) -> io::Result<Option<BoardStatus>> {
     // A board that was just plugged in or reset needs a moment to boot.
     for _ in 0..3 {
-        port.write_all(b"\nS\n")?;
+        // The empty line in front ends whatever the board may have half received.
+        port.write_all(format!("\n{}", Command::Status).as_bytes())?;
         port.flush()?;
         if let Some(line) = read_line_with(port, "STATUS", Duration::from_millis(700))? {
             return Ok(parse_status(&line));
@@ -168,13 +143,13 @@ impl std::error::Error for CredentialError {}
 
 /// Checks credentials against what the board accepts, so mistakes are reported before sending.
 pub fn check_credentials(ssid: &str, password: &str) -> Result<(), CredentialError> {
-    if ssid.is_empty() || ssid.len() > 32 {
+    if ssid.is_empty() || ssid.len() > MAX_SSID {
         return Err(CredentialError::SsidLength);
     }
-    if password.len() > 63 {
+    if password.len() > MAX_PASSWORD {
         return Err(CredentialError::PasswordTooLong);
     }
-    if !password.is_empty() && password.len() < 8 {
+    if !password.is_empty() && password.len() < MIN_PASSWORD {
         return Err(CredentialError::PasswordTooShort);
     }
     if ssid.chars().chain(password.chars()).any(char::is_control) {
@@ -186,10 +161,10 @@ pub fn check_credentials(ssid: &str, password: &str) -> Result<(), CredentialErr
 /// Stores WiFi credentials on the board, which then restarts and joins the network.
 pub fn set_wifi(port: &mut dyn SerialPort, ssid: &str, password: &str) -> Result<()> {
     check_credentials(ssid, password)?;
-    port.write_all(format!("\nW\t{ssid}\t{password}\n").as_bytes())?;
+    port.write_all(format!("\n{}", Command::SetWifi { ssid, password }).as_bytes())?;
     port.flush()?;
     match read_line_with(port, "", Duration::from_secs(2))?.as_deref() {
-        Some("OK") => Ok(()),
+        Some(reply) if reply == WIFI_STORED.trim_end() => Ok(()),
         Some(other) => bail!("the display refused the WiFi settings ({other})"),
         None => bail!("the display did not answer"),
     }

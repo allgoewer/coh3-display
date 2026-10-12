@@ -105,6 +105,9 @@ set with the `W` line above).
 - Frames are resent every 5 seconds as on serial. A display silent for 10 seconds is forgotten.
 - There is no authentication: anything on the LAN can send frames to the display.
 
+Both sides share the wire format, which lives in the `protocol/` crate: frames and replies in
+`frame.rs`, the board lines in `board.rs`, discovery and datagrams in `udp.rs`.
+
 Host side: `src/display_link.rs` (serial), `src/display_link/udp.rs`, `src/firmware.rs`.
-Device side: `firmware/src/protocol.rs`, `firmware/src/serial.rs`, `firmware/src/net.rs`,
+Device side: `firmware/src/serial.rs`, `firmware/src/net.rs`,
 `firmware/src/credentials.rs`.
