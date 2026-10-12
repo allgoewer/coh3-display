@@ -193,7 +193,21 @@ impl Lang {
         }
     }
 
-    /// The submenu of modes whose own ratings the display shows while the game is in its menu.
+    /// The submenu of what the display shows; the word is the same in both languages.
+    pub fn display_menu(self) -> &'static str {
+        "Display"
+    }
+
+    /// The submenu of how the match gets to the display.
+    pub fn connection_menu(self) -> &'static str {
+        match self {
+            Lang::En => "Connection",
+            Lang::De => "Verbindung",
+        }
+    }
+
+    /// The heading over the modes whose own ratings the display shows while the game is in
+    /// its menu.
     pub fn own_ratings_menu(self) -> &'static str {
         match self {
             Lang::En => "Own ratings in the menu",

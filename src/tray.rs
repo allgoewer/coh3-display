@@ -7,7 +7,9 @@ use std::sync::{Arc, mpsc};
 
 use anyhow::Result;
 use tokio::sync::watch;
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{
+    CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -87,61 +89,58 @@ struct App {
 }
 
 impl App {
+    /// The menu items for `entries`, with what each clickable one does noted under its id.
+    fn items(&mut self, entries: &[Entry]) -> Vec<Box<dyn IsMenuItem>> {
+        // A single `&` would be taken as a keyboard mnemonic.
+        let escape = |label: &str| label.replace('&', "&&");
+        let mut items: Vec<Box<dyn IsMenuItem>> = Vec::new();
+        for entry in entries {
+            let (label, checked, action) = match entry {
+                Entry::Separator => {
+                    items.push(Box::new(PredefinedMenuItem::separator()));
+                    continue;
+                }
+                Entry::Submenu { label, entries } => {
+                    let submenu = Submenu::new(escape(label), true);
+                    for item in self.items(entries) {
+                        let _ = submenu.append(item.as_ref());
+                    }
+                    items.push(Box::new(submenu));
+                    continue;
+                }
+                Entry::Label(label) => (escape(label), None, None),
+                Entry::Player { label, profile_id } => (escape(label), None, profile_id.map(Action::OpenProfile)),
+                Entry::Check { label, checked, toggle } => {
+                    (label.to_string(), Some(*checked), Some(Action::Toggle(*toggle)))
+                }
+                Entry::Brightness { label, checked, brightness } => {
+                    (label.to_string(), Some(*checked), Some(Action::Brightness(*brightness)))
+                }
+                Entry::Command { label, command } => (escape(label), None, Some(Action::Board(*command))),
+                Entry::Update { label } => (escape(label), None, Some(Action::OpenDownload)),
+                Entry::OpenLog => (self.ctx.lang.open_log().to_string(), None, Some(Action::OpenLog)),
+                Entry::Quit => (self.ctx.lang.quit().to_string(), None, Some(Action::Quit)),
+            };
+            // Nothing to do on a click: information only, greyed out.
+            let Some(action) = action else {
+                items.push(Box::new(MenuItem::new(label, false, None)));
+                continue;
+            };
+            let id = MenuId::new(format!("action{}", self.actions.len()));
+            self.actions.insert(id.clone(), action);
+            items.push(match checked {
+                Some(checked) => Box::new(CheckMenuItem::with_id(id, label, true, checked, None)),
+                None => Box::new(MenuItem::with_id(id, label, true, None)),
+            });
+        }
+        items
+    }
+
     fn build_menu(&mut self, model: &MenuModel) -> Menu {
         let menu = Menu::new();
         self.actions.clear();
-        for (index, entry) in model.entries.iter().enumerate() {
-            let id = MenuId::new(index.to_string());
-            // A single `&` would be taken as a keyboard mnemonic.
-            let escape = |label: &str| label.replace('&', "&&");
-            let _ = match entry {
-                Entry::Separator => menu.append(&PredefinedMenuItem::separator()),
-                Entry::Label(label) => menu.append(&MenuItem::with_id(id, escape(label), false, None)),
-                Entry::Player { label, profile_id } => {
-                    if let Some(profile_id) = profile_id {
-                        self.actions.insert(id.clone(), Action::OpenProfile(*profile_id));
-                    }
-                    menu.append(&MenuItem::with_id(id, escape(label), profile_id.is_some(), None))
-                }
-                Entry::Check { label, checked, toggle } => {
-                    self.actions.insert(id.clone(), Action::Toggle(*toggle));
-                    menu.append(&CheckMenuItem::with_id(id, label, true, *checked, None))
-                }
-                Entry::Group { label, checks } => {
-                    let submenu = Submenu::new(label, true);
-                    for (option, (label, checked, toggle)) in checks.iter().enumerate() {
-                        let id = MenuId::new(format!("{index}.{option}"));
-                        self.actions.insert(id.clone(), Action::Toggle(*toggle));
-                        let _ = submenu.append(&CheckMenuItem::with_id(id, label, true, *checked, None));
-                    }
-                    menu.append(&submenu)
-                }
-                Entry::Brightness { label, options, current } => {
-                    let submenu = Submenu::new(label, true);
-                    for (option, (label, brightness)) in options.iter().enumerate() {
-                        let id = MenuId::new(format!("{index}.{option}"));
-                        self.actions.insert(id.clone(), Action::Brightness(*brightness));
-                        let _ = submenu.append(&CheckMenuItem::with_id(id, label, true, brightness == current, None));
-                    }
-                    menu.append(&submenu)
-                }
-                Entry::Command { label, command } => {
-                    self.actions.insert(id.clone(), Action::Board(*command));
-                    menu.append(&MenuItem::with_id(id, escape(label), true, None))
-                }
-                Entry::Update { label } => {
-                    self.actions.insert(id.clone(), Action::OpenDownload);
-                    menu.append(&MenuItem::with_id(id, escape(label), true, None))
-                }
-                Entry::OpenLog => {
-                    self.actions.insert(id.clone(), Action::OpenLog);
-                    menu.append(&MenuItem::with_id(id, self.ctx.lang.open_log(), true, None))
-                }
-                Entry::Quit => {
-                    self.actions.insert(id.clone(), Action::Quit);
-                    menu.append(&MenuItem::with_id(id, self.ctx.lang.quit(), true, None))
-                }
-            };
+        for item in self.items(&model.entries) {
+            let _ = menu.append(item.as_ref());
         }
         menu
     }

@@ -33,10 +33,10 @@ pub enum Entry {
     /// Opens the player's coh3stats.com page when a profile is known.
     Player { label: String, profile_id: Option<u64> },
     Check { label: &'static str, checked: bool, toggle: Toggle },
-    /// A submenu of switches that belong together, each with its label and state.
-    Group { label: &'static str, checks: Vec<(&'static str, bool, Toggle)> },
-    /// A submenu to pick the display's brightness from; `current` is the one ticked.
-    Brightness { label: &'static str, options: Vec<(&'static str, Brightness)>, current: Brightness },
+    /// One of the brightnesses the display can be set to, ticked when it is the one in use.
+    Brightness { label: &'static str, checked: bool, brightness: Brightness },
+    /// Entries that belong together, one level down. None of them is a submenu itself.
+    Submenu { label: String, entries: Vec<Entry> },
     /// Something to do with the board on USB; asks before it acts.
     Command { label: String, command: Command },
     /// A newer version of the app is out; opens the page it can be downloaded from.
@@ -77,8 +77,15 @@ fn player_label(player: &PlayerInfo, lang: Lang) -> String {
 }
 
 /// The lines and actions for the board on USB. `embedded` is the firmware version this app
-/// can install, if it carries one.
-fn usb_entries(usb: &UsbLink, embedded: Option<&str>, lang: Lang, entries: &mut Vec<Entry>) {
+/// can install, if it carries one. What needs doing goes to `entries`, the rest to the
+/// `connection` submenu.
+fn usb_entries(
+    usb: &UsbLink,
+    embedded: Option<&str>,
+    lang: Lang,
+    entries: &mut Vec<Entry>,
+    connection: &mut Vec<Entry>,
+) {
     let state = match (usb.installing, &usb.firmware) {
         (Some(percent), _) => lang.installing_firmware(percent),
         (None, FirmwareState::Missing) => lang.no_firmware().to_string(),
@@ -90,10 +97,6 @@ fn usb_entries(usb: &UsbLink, embedded: Option<&str>, lang: Lang, entries: &mut 
         return;
     }
 
-    let current = matches!(usb.firmware, FirmwareState::Current(_));
-    if current && usb.wifi == Some(BoardWifi::Unset) {
-        entries.push(Entry::Label(lang.wifi_not_set_up().to_string()));
-    }
     match (&usb.firmware, embedded) {
         (FirmwareState::Missing, Some(_)) => entries.push(Entry::Command {
             label: lang.install_firmware().to_string(),
@@ -105,8 +108,14 @@ fn usb_entries(usb: &UsbLink, embedded: Option<&str>, lang: Lang, entries: &mut 
         }),
         _ => {}
     }
-    if current {
-        entries.push(Entry::Command { label: lang.set_up_wifi().to_string(), command: Command::SetupWifi });
+    if matches!(usb.firmware, FirmwareState::Current(_)) {
+        let set_up = Entry::Command { label: lang.set_up_wifi().to_string(), command: Command::SetupWifi };
+        if usb.wifi == Some(BoardWifi::Unset) {
+            entries.push(Entry::Label(lang.wifi_not_set_up().to_string()));
+            entries.push(set_up);
+        } else {
+            connection.push(set_up);
+        }
     }
 }
 
@@ -119,12 +128,7 @@ pub fn build(
     update: Option<&str>,
     lang: Lang,
 ) -> MenuModel {
-    let mut entries = vec![Entry::Label(format!("CoH3 Display {}", env!("CARGO_PKG_VERSION")))];
-    if let Some(version) = update {
-        entries.push(Entry::Update { label: lang.update_available(version) });
-    }
-    entries.push(Entry::Separator);
-
+    let mut entries = Vec::new();
     let mut tooltip = match info {
         Some(info) => {
             let map = maps::title(&info.map, lang);
@@ -145,8 +149,14 @@ pub fn build(
     };
     entries.push(Entry::Separator);
 
+    let check = |toggle, checked| Entry::Check { label: lang.toggle(toggle), checked, toggle };
+    let mut connection = vec![
+        check(Toggle::Usb, settings.usb),
+        check(Toggle::Wifi, settings.wifi),
+        check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
+    ];
     if let Some(usb) = &links.usb {
-        usb_entries(usb, embedded, lang, &mut entries);
+        usb_entries(usb, embedded, lang, &mut entries, &mut connection);
         if let Some(percent) = usb.installing {
             tooltip = lang.tooltip_installing(percent);
         }
@@ -160,30 +170,33 @@ pub fn build(
     }
     entries.push(Entry::Separator);
 
-    let check = |toggle, checked| Entry::Check { label: lang.toggle(toggle), checked, toggle };
-    entries.extend([
-        check(Toggle::Usb, settings.usb),
-        check(Toggle::Wifi, settings.wifi),
+    let mut display = vec![
         check(Toggle::ShowOwnTeam, settings.show_own_team),
-        check(Toggle::AutoUpdateFirmware, settings.auto_update_firmware),
         check(Toggle::KeepLastMatch, settings.keep_last_match),
-        Entry::Group {
-            label: lang.own_ratings_menu(),
-            checks: (0..ModeSet::NAMES.len())
-                .map(|mode| {
-                    let toggle = Toggle::OwnRating(mode);
-                    (lang.toggle(toggle), settings.own_ratings.contains(mode), toggle)
-                })
-                .collect(),
-        },
-        check(Toggle::Autostart, autostart),
-        Entry::Brightness {
-            label: lang.brightness_menu(),
-            options: Brightness::ALL.map(|brightness| (lang.brightness(brightness), brightness)).to_vec(),
-            current: settings.brightness,
-        },
         Entry::Separator,
-        Entry::OpenLog,
+        Entry::Label(lang.own_ratings_menu().to_string()),
+    ];
+    display.extend((0..ModeSet::NAMES.len()).map(|mode| check(Toggle::OwnRating(mode), settings.own_ratings.contains(mode))));
+    display.extend([Entry::Separator, Entry::Label(lang.brightness_menu().to_string())]);
+    display.extend(Brightness::ALL.map(|brightness| Entry::Brightness {
+        label: lang.brightness(brightness),
+        checked: brightness == settings.brightness,
+        brightness,
+    }));
+
+    entries.extend([
+        Entry::Submenu { label: lang.display_menu().to_string(), entries: display },
+        Entry::Submenu { label: lang.connection_menu().to_string(), entries: connection },
+        Entry::Separator,
+    ]);
+    if let Some(version) = update {
+        entries.push(Entry::Update { label: lang.update_available(version) });
+    }
+    entries.extend([
+        Entry::Submenu {
+            label: format!("CoH3 Display {}", env!("CARGO_PKG_VERSION")),
+            entries: vec![check(Toggle::Autostart, autostart), Entry::OpenLog],
+        },
         Entry::Quit,
     ]);
 
@@ -242,7 +255,7 @@ mod tests {
     fn marks_a_match_that_is_no_longer_on() {
         let title = |phase| {
             let info = MatchInfo { phase, ..santuario() };
-            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None, None, Lang::En))[1].clone()
+            labels(&build(Some(&info), &LinkStatus::default(), &Settings::default(), false, None, None, Lang::En))[0].clone()
         };
         assert_eq!(title(Phase::Live), "2v2 · Santuario");
         assert_eq!(title(Phase::Lingering), "2v2 · Santuario · ended");
@@ -260,6 +273,19 @@ mod tests {
             .collect()
     }
 
+    /// What the display, connection and app submenus hold, in that order.
+    fn submenus(model: &MenuModel) -> [&[Entry]; 3] {
+        let found: Vec<&[Entry]> = model
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Submenu { entries, .. } => Some(entries.as_slice()),
+                _ => None,
+            })
+            .collect();
+        found.try_into().expect("three submenus")
+    }
+
     #[test]
     fn shows_the_match_and_the_displays() {
         let links = LinkStatus {
@@ -272,7 +298,7 @@ mod tests {
         assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Santuario");
         assert!(model.connected);
         assert_eq!(
-            labels(&model)[1..],
+            labels(&model),
             [
                 "2v2 · Santuario",
                 "FairyTale · USF 1215 · 63%",
@@ -281,10 +307,21 @@ mod tests {
                 "WiFi 10.204.28.172: not answering",
             ]
         );
-        assert!(model.entries.contains(&Entry::Command {
-            label: "Set up WiFi on this display…".to_string(),
-            command: Command::SetupWifi
-        }));
+        // The board has its WiFi, so changing it is out of the way with the other connection settings.
+        let [_, connection, _] = submenus(&model);
+        assert_eq!(
+            connection,
+            [
+                Entry::Check { label: "Send over USB", checked: true, toggle: Toggle::Usb },
+                Entry::Check { label: "Send over WiFi", checked: true, toggle: Toggle::Wifi },
+                Entry::Check {
+                    label: "Update display firmware automatically",
+                    checked: true,
+                    toggle: Toggle::AutoUpdateFirmware
+                },
+                Entry::Command { label: "Set up WiFi on this display…".to_string(), command: Command::SetupWifi },
+            ]
+        );
         assert!(model.entries.contains(&Entry::Player {
             label: "FairyTale · USF 1215 · 63%".to_string(),
             profile_id: Some(101)
@@ -292,21 +329,29 @@ mod tests {
     }
 
     #[test]
-    fn offers_a_newer_version_under_the_title() {
+    fn offers_a_newer_version_above_the_app() {
         let with = |update, lang| build(None, &LinkStatus::default(), &Settings::default(), false, None, update, lang);
+        let app = |entry: &Entry| matches!(entry, Entry::Submenu { label, .. } if label.starts_with("CoH3 Display "));
 
         let model = with(Some("9.9.0"), Lang::En);
-        assert!(matches!(&model.entries[0], Entry::Label(title) if title.starts_with("CoH3 Display ")));
-        assert_eq!(model.entries[1], Entry::Update { label: "Version 9.9.0 available: download…".to_string() });
-        assert_eq!(model.entries[2], Entry::Separator);
-        assert_eq!(
-            with(Some("9.9.0"), Lang::De).entries[1],
-            Entry::Update { label: "Version 9.9.0 verfügbar: herunterladen…".to_string() }
-        );
+        let [.., separator, update, version, quit] = model.entries.as_slice() else {
+            panic!("the menu is too short");
+        };
+        assert_eq!(*separator, Entry::Separator);
+        assert_eq!(*update, Entry::Update { label: "Version 9.9.0 available: download…".to_string() });
+        assert!(app(version));
+        assert_eq!(*quit, Entry::Quit);
+        assert!(with(Some("9.9.0"), Lang::De)
+            .entries
+            .contains(&Entry::Update { label: "Version 9.9.0 verfügbar: herunterladen…".to_string() }));
 
         // Nothing newer, or the check has not answered: the menu is as it always was.
         let model = with(None, Lang::En);
-        assert_eq!(model.entries[1], Entry::Separator);
+        let [.., separator, version, _] = model.entries.as_slice() else {
+            panic!("the menu is too short");
+        };
+        assert_eq!(*separator, Entry::Separator);
+        assert!(app(version));
         assert!(!model.entries.iter().any(|entry| matches!(entry, Entry::Update { .. })));
     }
 
@@ -322,30 +367,36 @@ mod tests {
     fn describes_the_empty_states() {
         let model = build(None, &LinkStatus::default(), &Settings::default(), true, None, None, Lang::En);
         assert!(!model.connected);
-        assert_eq!(labels(&model)[1..], ["No match yet", "No display found"]);
-        assert!(model.entries.contains(&Entry::Check {
-            label: "Start with Windows",
-            checked: true,
-            toggle: Toggle::Autostart
-        }));
-        assert!(model.entries.contains(&Entry::Group {
-            label: "Own ratings in the menu",
-            checks: vec![
-                ("1v1", true, Toggle::OwnRating(0)),
-                ("2v2", true, Toggle::OwnRating(1)),
-                ("3v3", false, Toggle::OwnRating(2)),
-                ("4v4", false, Toggle::OwnRating(3)),
-            ],
-        }));
-        assert!(model.entries.contains(&Entry::Brightness {
-            label: "Display brightness",
-            options: vec![("Low", Brightness::Low), ("Normal", Brightness::Normal), ("High", Brightness::High)],
-            current: Brightness::Normal,
-        }));
+        assert_eq!(labels(&model), ["No match yet", "No display found"]);
+        let [display, connection, app] = submenus(&model);
+        assert_eq!(
+            display,
+            [
+                Entry::Check { label: "Show own team too", checked: false, toggle: Toggle::ShowOwnTeam },
+                Entry::Check { label: "Keep last match on display", checked: false, toggle: Toggle::KeepLastMatch },
+                Entry::Separator,
+                Entry::Label("Own ratings in the menu".to_string()),
+                Entry::Check { label: "1v1", checked: true, toggle: Toggle::OwnRating(0) },
+                Entry::Check { label: "2v2", checked: true, toggle: Toggle::OwnRating(1) },
+                Entry::Check { label: "3v3", checked: false, toggle: Toggle::OwnRating(2) },
+                Entry::Check { label: "4v4", checked: false, toggle: Toggle::OwnRating(3) },
+                Entry::Separator,
+                Entry::Label("Display brightness".to_string()),
+                Entry::Brightness { label: "Low", checked: false, brightness: Brightness::Low },
+                Entry::Brightness { label: "Normal", checked: true, brightness: Brightness::Normal },
+                Entry::Brightness { label: "High", checked: false, brightness: Brightness::High },
+            ]
+        );
+        // No board on USB, so there is no WiFi to set up.
+        assert_eq!(connection.len(), 3);
+        assert_eq!(
+            app,
+            [Entry::Check { label: "Start with Windows", checked: true, toggle: Toggle::Autostart }, Entry::OpenLog]
+        );
 
         let off = Settings { usb: false, wifi: false, ..Settings::default() };
         let model = build(None, &LinkStatus::default(), &off, false, None, None, Lang::En);
-        assert_eq!(labels(&model)[2], "Displays switched off");
+        assert_eq!(labels(&model)[1], "Displays switched off");
     }
 
     #[test]
@@ -360,7 +411,7 @@ mod tests {
 
         assert_eq!(model.tooltip, "CoH3 Display – 2v2 · Pachino-Ackerland · beendet");
         assert_eq!(
-            labels(&model)[1..],
+            labels(&model),
             [
                 "2v2 · Pachino-Ackerland · beendet",
                 "FairyTale · USF 1215 · 63%",
@@ -370,11 +421,17 @@ mod tests {
                 "WLAN 10.204.28.172: antwortet nicht",
             ]
         );
-        assert!(model.entries.contains(&Entry::Check {
-            label: "Mit Windows starten",
-            checked: false,
-            toggle: Toggle::Autostart
-        }));
+        let titles: Vec<&str> = model
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Submenu { label, .. } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles[..2], ["Display", "Verbindung"]);
+        let [_, _, app] = submenus(&model);
+        assert_eq!(app[0], Entry::Check { label: "Mit Windows starten", checked: false, toggle: Toggle::Autostart });
 
         let dim = Settings {
             brightness: Brightness::Low,
@@ -382,25 +439,28 @@ mod tests {
             ..Settings::default()
         };
         let model = build(None, &LinkStatus::default(), &dim, false, None, None, Lang::De);
-        assert!(model.entries.contains(&Entry::Group {
-            label: "Eigene Wertungen im Menü",
-            checks: vec![
-                ("1v1", false, Toggle::OwnRating(0)),
-                ("2v2", false, Toggle::OwnRating(1)),
-                ("3v3", true, Toggle::OwnRating(2)),
-                ("4v4", true, Toggle::OwnRating(3)),
-            ],
-        }));
-        assert!(model.entries.contains(&Entry::Brightness {
-            label: "Display-Helligkeit",
-            options: vec![("Niedrig", Brightness::Low), ("Normal", Brightness::Normal), ("Hoch", Brightness::High)],
-            current: Brightness::Low,
-        }));
+        let [display, _, _] = submenus(&model);
+        assert_eq!(
+            display[3..],
+            [
+                Entry::Label("Eigene Wertungen im Menü".to_string()),
+                Entry::Check { label: "1v1", checked: false, toggle: Toggle::OwnRating(0) },
+                Entry::Check { label: "2v2", checked: false, toggle: Toggle::OwnRating(1) },
+                Entry::Check { label: "3v3", checked: true, toggle: Toggle::OwnRating(2) },
+                Entry::Check { label: "4v4", checked: true, toggle: Toggle::OwnRating(3) },
+                Entry::Separator,
+                Entry::Label("Display-Helligkeit".to_string()),
+                Entry::Brightness { label: "Niedrig", checked: true, brightness: Brightness::Low },
+                Entry::Brightness { label: "Normal", checked: false, brightness: Brightness::Normal },
+                Entry::Brightness { label: "Hoch", checked: false, brightness: Brightness::High },
+            ]
+        );
         assert_eq!(model.tooltip, "CoH3 Display – noch kein Match");
-        assert_eq!(labels(&model)[1..], ["Noch kein Match", "Kein Display gefunden"]);
+        assert_eq!(labels(&model), ["Noch kein Match", "Kein Display gefunden"]);
     }
 
     fn commands(links: &LinkStatus, embedded: Option<&str>) -> Vec<(String, Command)> {
+        // Only what is offered right in the menu, not what waits in a submenu.
         build(None, links, &Settings::default(), false, embedded, None, Lang::En)
             .entries
             .into_iter()
@@ -417,7 +477,7 @@ mod tests {
 
         let blank = with(usb(FirmwareState::Missing, None, None));
         let model = build(None, &blank, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
-        assert_eq!(labels(&model)[2], "USB COM6: no display firmware");
+        assert_eq!(labels(&model)[1], "USB COM6: no display firmware");
         assert_eq!(commands(&blank, Some("0.2.0")), [("Install display firmware…".to_string(), Command::InstallFirmware)]);
         // An app built without firmware has nothing to offer.
         assert_eq!(commands(&blank, None), []);
@@ -440,7 +500,7 @@ mod tests {
         link.installing = Some(42);
         let links = LinkStatus { usb: Some(link), ..LinkStatus::default() };
         let model = build(None, &links, &Settings::default(), false, Some("0.2.0"), None, Lang::En);
-        assert_eq!(labels(&model)[2], "USB COM6: installing firmware… 42 %");
+        assert_eq!(labels(&model)[1], "USB COM6: installing firmware… 42 %");
         assert_eq!(model.tooltip, "CoH3 Display – installing firmware 42 %");
         assert_eq!(commands(&links, Some("0.2.0")), []);
     }
