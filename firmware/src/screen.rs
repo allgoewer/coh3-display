@@ -2,7 +2,7 @@ use core::fmt::Write;
 use core::sync::atomic::Ordering;
 
 use display_protocol::board::WifiState;
-use display_protocol::frame::NORMAL_BRIGHTNESS;
+use display_protocol::frame::{HOST_TIMEOUT, NORMAL_BRIGHTNESS};
 use display_protocol::{Frame, Match, OwnStats, Player};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Ticker, Timer};
@@ -36,8 +36,8 @@ const SCROLL_PAUSE: u32 = 25;
 const MIN_PAGE_TICKS: u32 = 125;
 /// How long the status screen stays up after power-on or a change of the WiFi state (30 s).
 const STATUS_TICKS: u32 = 750;
-/// The host repeats its frame every 5 s. After this long without one (30 s) it is gone.
-const HOST_TIMEOUT_TICKS: u32 = 750;
+/// The host repeats its frame every few seconds. After this long without one it is gone.
+const HOST_TIMEOUT_TICKS: u32 = (HOST_TIMEOUT.as_millis() as u64 / TICK.as_millis()) as u32;
 /// Stands for the panel's lowest brightness, below the levels a match can ask for (1 to 3).
 const IDLE_BRIGHTNESS: u8 = 0;
 /// The idle tank drives one pixel every this many ticks, about 8 pixels a second.

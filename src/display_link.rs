@@ -9,7 +9,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use display_protocol::frame::{self, Frame, MAX_MAP, MAX_NAME, MAX_PLAYERS, Reply, display_text};
+use display_protocol::frame::{self, Frame, MAX_MAP, MAX_NAME, MAX_PLAYERS, RESEND, Reply, display_text};
 use serialport::{SerialPort, SerialPortType};
 use tokio::sync::watch;
 
@@ -22,7 +22,6 @@ use crate::settings::{Brightness, ModeSet, Settings};
 
 /// USB-Serial-JTAG of Espressif chips.
 const USB_ID: (u16, u16) = (0x303A, 0x1001);
-const RESEND: Duration = Duration::from_secs(5);
 const RETRY: Duration = Duration::from_secs(2);
 /// How often a link that is switched off checks whether it was switched on again.
 const DISABLED_POLL: Duration = Duration::from_millis(500);
@@ -108,6 +107,68 @@ enum Stop {
     Disabled,
     /// The port must be released so firmware can be installed through it.
     Install,
+}
+
+/// What a link's loop finds when it looks at its context again.
+struct Round {
+    settings: Settings,
+    /// What the display should show may have changed since the last round.
+    changed: bool,
+}
+
+impl LinkContext {
+    /// Looks at what happened since the last round. `enabled` picks the link's own switch
+    /// from the settings; `Err` says why the link has to stop.
+    fn round(&mut self, enabled: fn(&Settings) -> bool) -> Result<Round, Stop> {
+        let Ok(match_changed) = self.matches.has_changed() else {
+            return Err(Stop::Closed);
+        };
+        let settings_changed = self.settings.has_changed().unwrap_or(false);
+        let own_changed = self.own.has_changed().unwrap_or(false);
+        let settings = *self.settings.borrow_and_update();
+        if !enabled(&settings) {
+            return Err(Stop::Disabled);
+        }
+        Ok(Round { settings, changed: match_changed || own_changed || settings_changed })
+    }
+
+    /// What the display should be told right now. A change that went into this frame no
+    /// longer counts as one in the rounds to come.
+    fn frame(&mut self, settings: &Settings) -> Frame {
+        let own = self.own.borrow_and_update().clone();
+        frame_for(self.matches.borrow_and_update().as_ref(), own.as_ref(), settings, self.lang)
+    }
+}
+
+/// Something a link does at intervals: sending the frame again, asking around.
+struct Every {
+    interval: Duration,
+    /// `None` until it was done for the first time.
+    next: Option<Instant>,
+}
+
+impl Every {
+    fn new(interval: Duration) -> Self {
+        Self { interval, next: None }
+    }
+
+    fn is_due(&self) -> bool {
+        self.next.is_none_or(|at| Instant::now() >= at)
+    }
+
+    fn is_first(&self) -> bool {
+        self.next.is_none()
+    }
+
+    /// It was done just now, and is due again after the interval.
+    fn done(&mut self) {
+        self.again_in(self.interval);
+    }
+
+    /// Like [`Every::done`], but due again after `delay` this once.
+    fn again_in(&mut self, delay: Duration) {
+        self.next = Some(Instant::now() + delay);
+    }
 }
 
 /// `alamein_4p` -> `alamein`
@@ -316,29 +377,24 @@ fn serve(
         ack: None,
         installing: None,
     };
-    let mut last_sent: Option<Instant> = None;
-    let mut last_probe: Option<Instant> = None;
+    let mut resend = Every::new(RESEND);
+    let mut probe = Every::new(PROBE_INTERVAL);
     loop {
-        let Ok(match_changed) = ctx.matches.has_changed() else {
-            return Ok(Stop::Closed);
+        let Round { settings, changed } = match ctx.round(|settings| settings.usb) {
+            Ok(round) => round,
+            Err(stop) => return Ok(stop),
         };
-        let settings_changed = ctx.settings.has_changed().unwrap_or(false);
-        let own_changed = ctx.own.has_changed().unwrap_or(false);
-        let settings = *ctx.settings.borrow_and_update();
-        if !settings.usb {
-            return Ok(Stop::Disabled);
-        }
 
-        if last_probe.is_none_or(|at| at.elapsed() >= PROBE_INTERVAL) {
+        if probe.is_due() {
             let status = firmware::probe_present(port, port_name)?;
             let state = firmware::classify(status.as_ref(), embedded);
-            if state != link.firmware || last_probe.is_none() {
+            if state != link.firmware || probe.is_first() {
                 log(format!("Board on {port_name}: {state:?}"));
             }
             link.firmware = state;
             link.wifi = status.map(|status| status.wifi);
             publish_usb(ctx, Some(link.clone()));
-            last_probe = Some(Instant::now());
+            probe.done();
 
             match &link.firmware {
                 FirmwareState::Current(_) => *auto_update_tried = false,
@@ -363,26 +419,23 @@ fn serve(
                     Err(err) => publish_outcome(ctx, OutcomeKind::WifiFailed { error: format!("{err:#}") }),
                 }
                 // The board restarts; ask again soon what it is doing.
-                last_probe = Instant::now().checked_sub(PROBE_INTERVAL - Duration::from_secs(3));
+                probe.again_in(Duration::from_secs(3));
             }
             Err(_) => {}
         }
 
         let is_display = matches!(link.firmware, FirmwareState::Current(_));
-        let changed = match_changed || own_changed || settings_changed;
-        if is_display && (changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND)) {
-            let own = ctx.own.borrow_and_update().clone();
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), own.as_ref(), &settings, ctx.lang);
-            let ack = send_frame(port, &frame)?;
+        if is_display && (changed || resend.is_due()) {
+            let ack = send_frame(port, &ctx.frame(&settings))?;
             if link.ack != Some(ack) {
                 log(format!("Display on {port_name}: {}", ack.describe()));
                 link.ack = Some(ack);
             }
             publish_usb(ctx, Some(link.clone()));
-            last_sent = Some(Instant::now());
+            resend.done();
             if ack == Ack::NoOled {
                 // Usually a board that has only just started; ask again in a second.
-                last_sent = Instant::now().checked_sub(RESEND - Duration::from_secs(1));
+                resend.again_in(Duration::from_secs(1));
             }
         }
         thread::sleep(Duration::from_millis(200));
@@ -635,7 +688,7 @@ mod tests {
         }
     }
 
-    fn own() -> OwnStats {
+    fn own_stats() -> OwnStats {
         OwnStats {
             name: "Nullgerät".to_string(),
             ratings: [
@@ -651,7 +704,7 @@ mod tests {
     fn shows_own_ratings_when_there_is_no_match_to_show() {
         let settings = Settings::default();
         let frame = |info: Option<&MatchInfo>, settings: &Settings| {
-            frame_for(info, Some(&own()), settings, Lang::En).to_string()
+            frame_for(info, Some(&own_stats()), settings, Lang::En).to_string()
         };
         let stats = "S\tNullgerät\nB\t2\nR\t1v1\t1207\t-\t-\t-\nR\t2v2\t1408\t-\t-\t1369\nE\n";
         assert_eq!(frame(None, &settings), stats);
@@ -680,7 +733,7 @@ mod tests {
 
     #[test]
     fn the_display_reads_own_ratings_as_they_were_sent() {
-        let frame = own_frame(&own(), ModeSet::new(&[0, 1, 3]), Brightness::High);
+        let frame = own_frame(&own_stats(), ModeSet::new(&[0, 1, 3]), Brightness::High);
         assert_eq!(received(&frame).as_ref(), Some(&frame));
         let Frame::Stats(parsed) = frame else {
             panic!("ratings make a ratings frame");
@@ -696,8 +749,50 @@ mod tests {
                 (4, [Some(1250), Some(1100), None, Some(1310)]),
             ]
         );
-        let single = own_frame(&own(), ModeSet::new(&[2]), Brightness::Normal);
+        let single = own_frame(&own_stats(), ModeSet::new(&[2]), Brightness::Normal);
         assert!(matches!(single, Frame::Stats(stats) if stats.pages.as_slice() == [(3, [None; 4])]));
+    }
+
+    #[test]
+    fn a_link_notices_changes_once_and_when_to_stop() {
+        let (match_tx, matches) = watch::channel(None);
+        let (own_tx, own) = watch::channel(None);
+        let (settings_tx, settings) = watch::channel(Settings::default());
+        let status = Arc::new(watch::channel(LinkStatus::default()).0);
+        let mut ctx = LinkContext { matches, own, settings, status, lang: Lang::En };
+        let mut changed = |ctx: &mut LinkContext| {
+            let round = ctx.round(|settings| settings.usb).ok().expect("the link is on");
+            (round.changed, ctx.frame(&round.settings))
+        };
+
+        assert_eq!(changed(&mut ctx), (false, Frame::Idle));
+        match_tx.send(Some(two_v_two())).unwrap();
+        assert!(matches!(changed(&mut ctx), (true, Frame::Match(_))));
+        assert!(matches!(changed(&mut ctx), (false, Frame::Match(_))));
+        match_tx.send(None).unwrap();
+        own_tx.send(Some(own_stats())).unwrap();
+        assert!(matches!(changed(&mut ctx), (true, Frame::Stats(_))));
+        settings_tx.send(Settings { own_ratings: ModeSet::new(&[]), ..Settings::default() }).unwrap();
+        assert_eq!(changed(&mut ctx), (true, Frame::Idle));
+        assert_eq!(changed(&mut ctx), (false, Frame::Idle));
+
+        // The other link's switch is none of this one's business; its own stops it.
+        settings_tx.send(Settings { wifi: false, ..Settings::default() }).unwrap();
+        assert!(ctx.round(|settings| settings.usb).is_ok());
+        settings_tx.send(Settings { usb: false, ..Settings::default() }).unwrap();
+        assert!(matches!(ctx.round(|settings| settings.usb), Err(Stop::Disabled)));
+        drop(match_tx);
+        assert!(matches!(ctx.round(|settings| settings.usb), Err(Stop::Closed)));
+    }
+
+    #[test]
+    fn what_is_done_at_intervals_is_due_at_once_and_then_after_the_interval() {
+        let mut every = Every::new(Duration::from_secs(3600));
+        assert!(every.is_due() && every.is_first());
+        every.done();
+        assert!(!every.is_due() && !every.is_first());
+        every.again_in(Duration::ZERO);
+        assert!(every.is_due());
     }
 
     #[test]

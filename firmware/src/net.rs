@@ -4,7 +4,7 @@ use core::cell::Cell;
 use core::fmt::Write;
 
 use display_protocol::board::WifiState;
-use display_protocol::udp::{BEACON_PORT, Beacon, FRAME_PORT, is_probe, parse_datagram};
+use display_protocol::udp::{BEACON_INTERVAL, BEACON_PORT, Beacon, FRAME_PORT, is_probe, parse_datagram};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
@@ -22,7 +22,6 @@ use static_cell::StaticCell;
 use crate::credentials::Credentials;
 use crate::{FRAME, frame_reply};
 
-const BEACON_INTERVAL: Duration = Duration::from_secs(2);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 static STATE: Mutex<CriticalSectionRawMutex, Cell<WifiState>> = Mutex::new(Cell::new(WifiState::Unset));
@@ -116,7 +115,7 @@ async fn udp_task(stack: Stack<'static>, mac: [u8; 6]) {
 
         let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx_buffer, &mut tx_meta, &mut tx_buffer);
         if socket.bind(FRAME_PORT).is_ok() {
-            let mut ticker = Ticker::every(BEACON_INTERVAL);
+            let mut ticker = Ticker::every(Duration::from_millis(BEACON_INTERVAL.as_millis() as u64));
             loop {
                 match select3(socket.recv_from(&mut datagram), ticker.next(), stack.wait_config_down()).await {
                     Either3::First(Ok((len, sender))) => {

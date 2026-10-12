@@ -1,6 +1,7 @@
 //! Finding displays on the LAN, and frames as they travel in datagrams.
 
 use core::fmt;
+use core::time::Duration;
 
 use crate::frame::{Frame, MAX_LINE, Parser};
 
@@ -12,6 +13,12 @@ const BEACON_PREFIX: &str = "COH3DISPLAY 1 ";
 /// Broadcast by the PC; a display answers it with its beacon, sent straight back. Unlike the
 /// display's own broadcast, that answer gets through a firewall that blocks unsolicited traffic.
 pub const PROBE: &[u8] = b"COH3DISPLAY? 1\n";
+/// How often a display broadcasts its beacon.
+pub const BEACON_INTERVAL: Duration = Duration::from_secs(2);
+/// How often the PC broadcasts its probe.
+pub const PROBE_INTERVAL: Duration = Duration::from_secs(2);
+/// The PC forgets a display whose beacons stopped for this long.
+pub const DISPLAY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whether a datagram asks the display to send its beacon straight back.
 pub fn is_probe(data: &[u8]) -> bool {

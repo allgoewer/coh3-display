@@ -1,6 +1,7 @@
 //! What the host asks the screen to show: frames, as text lines.
 
 use core::fmt;
+use core::time::Duration;
 
 use heapless::{String, Vec};
 
@@ -12,6 +13,11 @@ pub const MAX_NAME: usize = 24;
 pub const MAX_MAP: usize = 32;
 /// The brightness of a match whose frame does not say.
 pub const NORMAL_BRIGHTNESS: u8 = 2;
+/// The host repeats the current frame this often, so the display recovers on its own after a
+/// reset or replug.
+pub const RESEND: Duration = Duration::from_secs(5);
+/// A display that has heard no frame for this long goes idle: the host is gone.
+pub const HOST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Player {

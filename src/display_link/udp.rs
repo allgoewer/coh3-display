@@ -7,17 +7,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use display_protocol::Reply;
-use display_protocol::udp::{BEACON_PORT, Datagram, FRAME_PORT, PROBE, parse_beacon};
+use display_protocol::udp::{
+    BEACON_PORT, DISPLAY_TIMEOUT, Datagram, FRAME_PORT, PROBE, PROBE_INTERVAL, parse_beacon,
+};
 
-use super::{Ack, DISABLED_POLL, LinkContext, RESEND, Stop, WifiLink, frame_for, match_frame};
+use super::{Ack, DISABLED_POLL, Every, LinkContext, RESEND, Round, Stop, WifiLink, match_frame};
 use crate::applog::log;
 use crate::i18n::Lang;
 use crate::model::MatchInfo;
 use crate::settings::Brightness;
 
-const PROBE_INTERVAL: Duration = Duration::from_secs(2);
-/// A display that stopped sending beacons for this long is forgotten.
-const STALE: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(200);
 
 struct Device {
@@ -116,37 +115,30 @@ fn serve(socket: &UdpSocket, fixed: Option<IpAddr>, ctx: &mut LinkContext) -> io
     if let Some(addr) = fixed {
         devices.insert(addr, Device::new(true));
     }
-    let mut last_sent: Option<Instant> = None;
-    let mut last_probe: Option<Instant> = None;
+    let mut resend = Every::new(RESEND);
+    let mut ask = Every::new(PROBE_INTERVAL);
     loop {
-        let Ok(match_changed) = ctx.matches.has_changed() else {
-            return Ok(Stop::Closed);
+        let Round { settings, changed } = match ctx.round(|settings| settings.wifi) {
+            Ok(round) => round,
+            Err(stop) => return Ok(stop),
         };
-        let settings_changed = ctx.settings.has_changed().unwrap_or(false);
-        let own_changed = ctx.own.has_changed().unwrap_or(false);
-        let settings = *ctx.settings.borrow_and_update();
-        if !settings.wifi {
-            return Ok(Stop::Disabled);
-        }
-        if last_probe.is_none_or(|at| at.elapsed() >= PROBE_INTERVAL) {
+        if ask.is_due() {
             probe(socket);
-            last_probe = Some(Instant::now());
+            ask.done();
         }
         let found_new = receive(socket, &mut devices)?;
         devices.retain(|addr, device| {
-            let keep = device.fixed || device.last_seen.elapsed() < STALE;
+            let keep = device.fixed || device.last_seen.elapsed() < DISPLAY_TIMEOUT;
             if !keep {
                 log(format!("Display at {addr} is gone"));
             }
             keep
         });
 
-        let changed = match_changed || own_changed || settings_changed || found_new;
-        if changed || last_sent.is_none_or(|at| at.elapsed() >= RESEND) {
-            let own = ctx.own.borrow_and_update().clone();
-            let frame = frame_for(ctx.matches.borrow_and_update().as_ref(), own.as_ref(), &settings, ctx.lang);
+        if changed || found_new || resend.is_due() {
+            let frame = ctx.frame(&settings);
             send(socket, &mut devices, &Datagram(&frame).to_string());
-            last_sent = Some(Instant::now());
+            resend.done();
         }
         publish(ctx, &devices);
     }
@@ -199,11 +191,11 @@ pub fn send_once(
         devices.insert(addr, Device::new(true));
     }
     let deadline = Instant::now() + wait;
-    let mut last_probe: Option<Instant> = None;
+    let mut ask = Every::new(Duration::from_secs(1));
     while devices.is_empty() && Instant::now() < deadline {
-        if last_probe.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+        if ask.is_due() {
             probe(&socket);
-            last_probe = Some(Instant::now());
+            ask.done();
         }
         receive(&socket, &mut devices)?;
     }
