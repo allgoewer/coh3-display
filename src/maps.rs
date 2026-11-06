@@ -49,11 +49,12 @@ mod tests {
         // Not every scenario is named after its size.
         assert_eq!(title("eindhoven", Lang::En), "Operation Eindhoven");
         assert_eq!(title("desert_airfield_6p_mkii", Lang::De), "Landeplatz Gazala");
+        assert_eq!(title("turin_8p", Lang::De), "Stahlwerk Turin");
     }
 
     #[test]
     fn uses_english_where_the_game_has_no_german_title() {
-        assert_eq!(title("ancona_railyard_2p", Lang::De), "Ancona Railyard");
+        assert_eq!(title("hill_400_8p", Lang::De), "Hill 400");
     }
 
     #[test]
